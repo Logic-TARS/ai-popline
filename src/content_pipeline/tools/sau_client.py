@@ -216,6 +216,8 @@ def call_sau_target(
             desc,
             "--headed",
             "--debug",
+            "--visibility",
+            target.visibility,
         ]
         if tags:
             command.extend(["--tags", ",".join(tags)])

@@ -343,7 +343,8 @@ def test_kuaishou_public_target_requires_public_visibility_proof(tmp_path: Path,
         dry_run=True,
     )
     assert dry_run["visibility"] == "public"
-    assert "--visibility" not in dry_run["command"]
+    assert "--visibility" in dry_run["command"]
+    assert dry_run["command"][dry_run["command"].index("--visibility") + 1] == "public"
 
     def fake_run_command(command, **kwargs):
         import subprocess
