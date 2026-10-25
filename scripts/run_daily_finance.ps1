@@ -17,6 +17,8 @@ $task = [ordered]@{
     params       = [ordered]@{
         date        = 'auto'
         script_mode = '90_seconds'
+        douyin_account = '金融破壁人'
+        kuaishou_account = '金融破壁人'
         dry_run     = $false
     }
 }

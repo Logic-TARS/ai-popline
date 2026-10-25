@@ -45,7 +45,7 @@ def main() -> int:
     publish = args.publish and not args.skip_publish
     targets = (
         [
-            PublishTarget(platform="douyin", account="金融破壁人"),
+            PublishTarget(platform="douyin", account="硅基思维TARS"),
             PublishTarget(platform="kuaishou", account="硅基思维TARS"),
         ]
         if publish
