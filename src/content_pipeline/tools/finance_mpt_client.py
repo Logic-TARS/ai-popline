@@ -22,6 +22,7 @@ def call_finance_mpt(
     settings: Settings,
     dry_run: bool = False,
     target_duration_seconds: float = 90.0,
+    allowed_duration: tuple[float, float] | None = None,
     generation_metadata: dict[str, object] | None = None,
 ) -> FinanceMptResult:
     return call_narrated_mpt(
@@ -33,5 +34,6 @@ def call_finance_mpt(
         dry_run=dry_run,
         voice_rate=1.0 if target_duration_seconds == 90.0 else None,
         target_duration_seconds=target_duration_seconds,
+        allowed_duration=allowed_duration,
         generation_metadata=generation_metadata,
     )

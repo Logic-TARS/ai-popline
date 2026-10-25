@@ -338,8 +338,11 @@ def build_finance_script_material(response: str, publication_date: str, *, durat
         "disclaimer": DISCLAIMER,
     }
     try:
-        limits = {"short_30_60": (180, 320), "long_1_3_minutes": (300, 800)}.get(duration_variant, (300, 600))
-        material["fallback_script"] = build_daily_markdown_script(response, publication_date, min_chars=limits[0], max_chars=limits[1])
+        if duration_variant in {"legacy_90_seconds", "90_seconds"}:
+            material["fallback_script"] = build_90_second_script(response, publication_date)
+        else:
+            limits = {"short_30_60": (180, 320), "long_1_3_minutes": (300, 800)}.get(duration_variant, (300, 600))
+            material["fallback_script"] = build_daily_markdown_script(response, publication_date, min_chars=limits[0], max_chars=limits[1])
     except ConfigError as exc:
         material["fallback_script"] = ""
         material["fallback_error"] = str(exc)

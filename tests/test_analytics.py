@@ -14,6 +14,7 @@ def test_import_metrics_normalizes_aliases_and_calculates_summary(tmp_path: Path
                     "平台": "抖音",
                     "内容线": "finance",
                     "时长版本": "short_30_60",
+                    "日期": "2026-11-01",
                     "播放": "1,000",
                     "点赞": 10,
                     "分享": 5,

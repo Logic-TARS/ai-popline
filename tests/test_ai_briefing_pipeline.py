@@ -363,7 +363,7 @@ def test_explicit_publish_targets_must_match_defaults(tmp_path: Path, monkeypatc
             publish=True,
             publish_targets=[
                 PublishTarget(platform="douyin", account="金融破壁人"),
-                PublishTarget(platform="kuaishou", account="搞AI的罗辑同学"),
+                PublishTarget(platform="kuaishou", account="硅基思维TARS"),
             ],
             params={"date": "20260720", "handoff_wait_seconds": 0, "dry_run": True},
         )

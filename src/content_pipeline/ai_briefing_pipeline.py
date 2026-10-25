@@ -13,6 +13,7 @@ from typing import Any
 
 from .errors import ConfigError, ExternalToolError, MediaValidationError
 from .media_validation import validate_images, validate_video
+from .metadata_generation.audit import generate_pipeline_metadata
 from .models import AiBriefingParams, CoverParams, ErrorCode, JobStatus, PipelineStep, PublishTarget
 from .pipelines.registry import PipelineContext, PipelineMeta, register
 from .publish_policy import resolve_publish_plan
@@ -465,6 +466,8 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
                     fallback_script=str(material["fallback_script"]),
                     failure_policy=params.script_failure_policy,
                     repair_attempts=params.script_repair_attempts,
+                    duration_variant=params.duration_variant or "long_1_3_minutes",
+                    strategy_profile=params.strategy_profile,
                     on_attempt=lambda attempt: record_script_attempt_event(store, task_id, attempt),
                 )
             else:
@@ -472,6 +475,8 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
                     content_type="ai_briefing",
                     material=material,
                     script=str(material["fallback_script"]),
+                    duration_variant=params.duration_variant or "long_1_3_minutes",
+                    strategy_profile=params.strategy_profile,
                 )
         except Exception as exc:
             status["script_writer"] = "llm_failed" if params.script_writer == "llm" else "rule_failed"
@@ -515,6 +520,23 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
         status["steps"]["script_build"] = "ok"
         status["narration_chars"] = generation.audit.quality_report.character_count
         status["updated_at"] = _now_iso()
+        _write_json(status_path, status)
+        store.set_artifacts(task_id, artifacts)
+
+        status["steps"]["metadata_generation"] = "running"
+        _write_json(status_path, status)
+        title, description = generate_pipeline_metadata(
+            ctx,
+            params=params,
+            material=material,
+            script=script,
+            rule_title=title,
+        )
+        artifacts.final_title = title
+        artifacts.final_description = description
+        status["video_title"] = build_video_title(title)
+        status["description"] = description
+        status["steps"]["metadata_generation"] = "ok"
         _write_json(status_path, status)
         store.set_artifacts(task_id, artifacts)
 
@@ -602,7 +624,10 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
             dry_run=params.dry_run,
             force_regenerate=params.force_regenerate,
             input_hashes=input_hashes,
-            voice_rate=params.voice_rate,
+            voice_rate=1.0 if (params.duration_variant or "legacy_90_seconds") == "legacy_90_seconds" else None,
+            target_duration_seconds=45.0 if params.duration_variant == "short_30_60" else 120.0 if params.duration_variant == "long_1_3_minutes" else 90.0,
+            allowed_duration=(30.0, 60.0) if params.duration_variant == "short_30_60" else (60.0, 180.0) if params.duration_variant == "long_1_3_minutes" else None,
+            generation_metadata={"experiment_id": params.experiment_id, "strategy_profile": params.strategy_profile, "duration_variant": params.duration_variant},
         )
         validate_spoken_subtitle(result.subtitle)
         artifacts.video = result.video
@@ -610,7 +635,7 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
         artifacts.mpt_task_dir = result.task_dir
         artifacts.manifest_path = result.manifest
         if not params.dry_run:
-            artifacts.validation.video = validate_video(result.video, expected_aspect="9:16", require_audio=True)
+            artifacts.validation.video = validate_video(result.video, expected_aspect="9:16", require_audio=True, allowed_duration=(30.0, 60.0) if params.duration_variant == "short_30_60" else (60.0, 180.0) if params.duration_variant == "long_1_3_minutes" else None)
             status["video_sha256"] = _sha256(result.video)
             status["sau_file_hash"] = _sau_file_hash(result.video)
             legacy_output = Path(str(handoff["output_dir"]))
@@ -660,7 +685,7 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
             settings=settings,
             video=Path(artifacts.video).resolve(),
             title=publish_title,
-            description=params.description,
+            description=description,
             tags=params.tags,
             requested=plan["requested"],
             targets=targets,
@@ -676,6 +701,8 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
         _append_jsonl(index_path, _handoff_event(handoff, status, status["status"]))
         store.finish(task_id, final, error)
     except Exception as exc:
+        if "metadata_generation" in status.get("steps", {}):
+            status["steps"]["metadata_generation"] = "failed"
         status["status"] = "failed"
         status["error"] = str(exc)
         status["updated_at"] = _now_iso()
