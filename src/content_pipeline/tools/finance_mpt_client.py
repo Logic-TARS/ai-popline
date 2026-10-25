@@ -21,6 +21,8 @@ def call_finance_mpt(
     output_dir: Path,
     settings: Settings,
     dry_run: bool = False,
+    target_duration_seconds: float = 90.0,
+    generation_metadata: dict[str, object] | None = None,
 ) -> FinanceMptResult:
     return call_narrated_mpt(
         task_name=f"finance-{publication_date.replace('-', '')}",
@@ -29,5 +31,7 @@ def call_finance_mpt(
         output_dir=output_dir,
         settings=settings,
         dry_run=dry_run,
-        voice_rate=1.0,
+        voice_rate=1.0 if target_duration_seconds == 90.0 else None,
+        target_duration_seconds=target_duration_seconds,
+        generation_metadata=generation_metadata,
     )

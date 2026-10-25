@@ -32,7 +32,7 @@ SCRIPT_LLM_MODEL=
 SCRIPT_LLM_TIMEOUT_SECONDS=120
 ```
 
-`SCRIPT_LLM_*` configures the OpenAI-compatible client used by AI Briefing and finance script planning, drafting, and targeted repair. When endpoint, key, or model is empty, the corresponding `ROUTER_LLM_*` value is used for backwards compatibility. `SCRIPT_LLM_TIMEOUT_SECONDS` defaults to 120 and accepts 5–600 seconds. Pipeline params select `script_failure_policy: fail` or `validated_rule_fallback` and allow `script_repair_attempts` from 0 to 2 (default 1). Generated jobs keep the legacy script file and additionally write `script/plan.json`, `script/attempts.json`, `script/quality-report.json`, and `script/audit.json`.
+`SCRIPT_LLM_*` configures the shared OpenAI-compatible client used by AI Briefing and finance script planning, drafting, targeted repair, and independent title/description generation. When endpoint, key, or model is empty, the corresponding `ROUTER_LLM_*` value is used for backwards compatibility. `SCRIPT_LLM_TIMEOUT_SECONDS` defaults to 120 and accepts 5–600 seconds. Pipeline params select `script_failure_policy: fail` or `validated_rule_fallback` and allow `script_repair_attempts` from 0 to 2 (default 1). Generated jobs keep the legacy script file and additionally write `script/plan.json`, `script/attempts.json`, `script/quality-report.json`, and `script/audit.json`. `quality_gate` defaults to `soft` and is recorded in `script/quality-report.json`.
 
 `COVER_FORGE_URL` and `COVER_FORGE_TIMEOUT_SECONDS` configure the optional localhost sidecar used by the AI Briefing cover stage; start Cover-Forge separately with `npm start`. When the sidecar is unavailable or fails, the pipeline falls back to built-in Pillow-based cover rendering (gradient background with the normalized title), so covers are generated even without Cover-Forge. Dry-run AI Briefing tasks skip this call.
 
@@ -99,6 +99,7 @@ WEB_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080
 WEB_AUTH_REQUIRED=false
 WEB_PUBLISH_ENABLED=false
 WEB_ALLOW_ZEROTIER_HTTP=false
+CACHE_CLEANUP_ROOT=
 ```
 
 Remote access requires the exact ZeroTier interface IP and all of the following:
@@ -190,6 +191,67 @@ The final output would go under:
 
 ```text
 output\japanese\<task_id>\
+```
+
+### AI Briefing and finance titles/descriptions
+
+Only `ai_briefing` and `finance` accept these metadata and quality-gate parameters:
+
+| Parameter | Values | Default |
+| --- | --- | --- |
+| `title_writer` | `follow_script`, `rule`, `llm` | `follow_script` |
+| `description_writer` | `follow_script`, `rule`, `llm` | `follow_script` |
+| `metadata_failure_policy` | `fail`, `validated_rule_fallback` | `fail` |
+| `metadata_repair_attempts` | Integer from 0 to 2, per stage | `1` |
+| `quality_gate` | `soft`, `strict` | `soft` |
+
+`quality_gate` applies to both content gates — the narration script check and the title/description check. `soft` runs the same checks but records every non-compliance issue as a warning instead of an error, so it no longer blocks the job; the issues stay visible in `script/quality-report.json`, `metadata_audit.json`, and the job events, and both reports record the gate that produced them. `strict` restores the pre-soft behaviour where any issue blocks. Two compliance sets stay blocking under `soft`: the finance narration checks `finance_prohibited`, `finance_disclaimer`, and `finance_risk_warning`, and the metadata grounding checks `empty_text`, `fact_anchor_missing`, and `script_anchor_missing`.
+
+`follow_script` resolves each metadata writer from `script_writer`. A nonempty `params.title` or `params.description` takes priority and skips that field's generation stage, independently of the other field. The task's top-level `description` remains a task label; it is not the publishing description.
+
+Both pipelines now default `params.description` to `""` (automatic). Rule mode restores the original fixed descriptions: `今日AI简报` for AI Briefing and `每日基金日报，仅供参考，不构成投资建议` for finance. Existing schedules, saved console form values, and enabled defaults containing nonempty descriptions remain manual overrides; explicitly clear those values to opt into generation. The following task requests all three text stages from the configured model without real media generation or publishing:
+
+```json
+{
+  "description": "Review generated AI titles and descriptions",
+  "content_type": "ai_briefing",
+  "publish": false,
+  "params": {
+    "script_writer": "llm",
+    "title_writer": "follow_script",
+    "description_writer": "follow_script",
+    "metadata_failure_policy": "fail",
+    "metadata_repair_attempts": 1,
+    "title": "",
+    "description": "",
+    "dry_run": true
+  }
+}
+```
+
+The order is validated narration → title → description → media → optional publishing. The final title is passed to existing cover/video/publishing handling, and the final description is passed to publishing. Failures block downstream media and publishing by default; `validated_rule_fallback` permits a rule candidate only if it passes validation. Metadata text, source, quality results, and attempts are retained for audit, including on failure. See [Script generation](script-generation.md) for length targets, finance risk notices, and validation limits.
+
+**Dry-run is not an offline text mode:** LLM narration, title, and description stages still make real requests and may incur charges or send source content to the provider. Use `script_writer: rule` with metadata writers set to `rule` or `follow_script` for local-only text generation. Keep `publish: false` during review.
+
+The source and packaged YAML templates remain `enabled: false`; this feature does not enable defaults, change publishing policy, or migrate production schedules. Long-running backends require a separately managed deployment/restart before they can execute the new code. Review and migrate existing project schedules only after verification; changing a template alone does not update their explicit parameters.
+
+## Cache maintenance
+
+The console settings center (定时任务 → 设置中心 → 缓存维护) scans and deletes regenerable caches through `POST /maintenance/cache-cleanup`. Scanning (`{"apply": false}`) only lists candidates and never deletes; `{"apply": true}` removes them. Responses carry paths relative to the scanned root, so the console never receives absolute filesystem locations.
+
+The swept set is bytecode and tool state only: `__pycache__/`, `*.pyc`, `*.pyo`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.hypothesis`, `.pytype`, `.ipynb_checkpoints`, and `.coverage*`. Never touched: version control data, virtual environments (recognised by `pyvenv.cfg`, so `dist/check-venv/` is skipped too), `output/`, `data/`, `logs/`, `node_modules/`, and `.codegraph/`. Build outputs (`build/`, `dist/`, `htmlcov/`, `*.egg-info/`) are opt-in and only reachable from the CLI.
+
+`CACHE_CLEANUP_ROOT` selects the tree to sweep and defaults to the directory the backend was started from; a root that is a filesystem root, the home directory, a protected directory name, or a virtual environment is refused with `409 cache_cleanup_unavailable`. The action is a mutating request, so authenticated sessions must send the CSRF header (the console does this automatically) and it is unavailable without the Web/API boundary.
+
+The CLI mirrors the same implementation:
+
+```powershell
+# preview only (default) — nothing is deleted
+.\scripts\clean_cache.ps1
+# delete the previewed items; add -IncludeBuild for build/, dist/, *.egg-info/
+.\scripts\clean_cache.ps1 -Apply
+# or directly, on any platform
+python scripts\clean_cache.py --apply
 ```
 
 ## Central publish policy

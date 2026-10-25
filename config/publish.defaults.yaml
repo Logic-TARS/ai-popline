@@ -15,22 +15,19 @@ finance:
   enabled: false
   targets:
     - { platform: douyin, account: 金融破壁人 }
-    - { platform: kuaishou, account: 搞AI的罗辑同学 }
-    - { platform: tencent, account: 每日金融摘要 }
+    - { platform: kuaishou, account: 硅基思维TARS }
 
 ai_briefing:
   enabled: false
   targets:
     - { platform: douyin, account: 金融破壁人 }
-    - { platform: kuaishou, account: 搞AI的罗辑同学 }
-    - { platform: tencent, account: 每日金融摘要 }
+    - { platform: kuaishou, account: 硅基思维TARS }
 
 script_video:
   enabled: false
   targets:
     - { platform: douyin, account: 金融破壁人 }
-    - { platform: kuaishou, account: 搞AI的罗辑同学 }
-    - { platform: tencent, account: 每日金融摘要 }
+    - { platform: kuaishou, account: 硅基思维TARS }
 
 grouped_anime:
   enabled: false

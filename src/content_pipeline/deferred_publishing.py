@@ -28,7 +28,7 @@ __all__ = [
     "validate_deferred_publish_request",
 ]
 
-SUPPORTED_SCRIPT_VIDEO_TARGETS = ("douyin", "kuaishou", "tencent")
+SUPPORTED_SCRIPT_VIDEO_TARGETS = ("douyin", "kuaishou")
 ACTIVE_PUBLICATION_STATUSES = {"queued", "running"}
 PUBLICATION_STATE_LABELS = {
     "waiting_generation": "待生成",
@@ -403,8 +403,7 @@ def publication_readiness(
             "tags": list(params.get("tags") or []),
             "accounts": {
                 "douyin": str(params.get("douyin_account") or "金融破壁人"),
-                "kuaishou": str(params.get("kuaishou_account") or "搞AI的罗辑同学"),
-                "tencent": str(params.get("tencent_account") or "每日金融摘要"),
+                "kuaishou": str(params.get("kuaishou_account") or "硅基思维TARS"),
             },
         },
         "video_ready": video is not None,

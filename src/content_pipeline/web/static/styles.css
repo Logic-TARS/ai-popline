@@ -821,13 +821,20 @@ pre { overflow: auto; margin: 0.7rem 0 0; padding: 0.9rem; border: 1px solid var
 .account-state.warning { color: var(--warning-text); }
 .account-state.unavailable { color: var(--danger-text); }
 .account-card-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; margin-top: 0.75rem; padding-top: 0.7rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.72rem; }
+.cache-cleanup-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.9rem; }
+.cache-cleanup-list { display: grid; gap: 0.4rem; max-height: 22rem; overflow-y: auto; scrollbar-gutter: stable; }
+.cache-cleanup-row { display: grid; min-width: 0; grid-template-columns: 8.5rem minmax(0, 1fr) auto; gap: 0.7rem; align-items: center; padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--control-background); font-size: 0.8rem; }
+.cache-cleanup-row code { overflow: hidden; color: var(--muted-strong); font-family: var(--mono); font-size: 0.76rem; text-overflow: ellipsis; white-space: nowrap; }
+.cache-cleanup-category { color: var(--cyan); font-size: 0.76rem; font-weight: 750; white-space: nowrap; }
+.cache-cleanup-size { color: var(--muted); font-family: var(--mono); font-size: 0.74rem; white-space: nowrap; }
+.cache-cleanup-failure { margin: 0.3rem 0 0; color: var(--danger-text); font-size: 0.76rem; }
 .settings-footer { justify-content: space-between; }
 .settings-footer > div { display: flex; gap: 0.65rem; }
 .settings-save-status { color: var(--muted); font-size: 0.78rem; }
 .settings-save-status.error { color: var(--danger-text); }
 
 @media (prefers-contrast: more) {
-  .settings-tab[aria-selected="true"], .policy-content-button[aria-pressed="true"], .settings-content-card, .policy-target, .defaults-card, .account-card { border-width: 2px; }
+  .settings-tab[aria-selected="true"], .policy-content-button[aria-pressed="true"], .settings-content-card, .policy-target, .defaults-card, .account-card, .cache-cleanup-row { border-width: 2px; }
   .settings-tab[aria-selected="true"] { box-shadow: inset 4px 0 var(--cyan); }
 }
 @media (forced-colors: active) {

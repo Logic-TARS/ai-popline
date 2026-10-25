@@ -46,7 +46,7 @@ def test_account_identities_are_grouped_by_platform(monkeypatch) -> None:
                     {"platform": "kuaishou", "account": " 搞AI的罗辑同学 "},
                     {"platform": "kuaishou", "account": "   "},
                     {"platform": "", "account": "缺少平台"},
-                    {"platform": "tencent", "account": "每日金融摘要"},
+                    {"platform": "bilibili", "account": "硅基思维TARS"},
                 ]
             }
         ),
@@ -57,7 +57,7 @@ def test_account_identities_are_grouped_by_platform(monkeypatch) -> None:
     assert identities == {
         "douyin": ["金融破壁人", "硅基思维TARS"],
         "kuaishou": ["搞AI的罗辑同学"],
-        "tencent": ["每日金融摘要"],
+        "bilibili": ["硅基思维TARS"],
     }
 
 

@@ -29,6 +29,19 @@ def test_task_input_normalizes_description_topic_and_publish_account() -> None:
     assert task.publish_targets[0].account == "账号"
 
 
+def test_content_experiment_params_normalize_duration_variants() -> None:
+    finance = FinanceParams.model_validate({"script_mode": "short_30_60", "experiment_id": " exp-1 "})
+    long_ai = AiBriefingParams.model_validate({"script_mode": "long_1_3_minutes"})
+    legacy = FinanceParams.model_validate({"script_mode": "90_seconds"})
+
+    assert finance.strategy_profile == "finance_conversion"
+    assert finance.experiment_id == "exp-1"
+    assert finance.duration_variant == "short_30_60"
+    assert long_ai.strategy_profile == "ai_reach"
+    assert long_ai.duration_variant == "long_1_3_minutes"
+    assert legacy.duration_variant == "legacy_90_seconds"
+
+
 def test_task_input_normalizes_blank_topic_to_none() -> None:
     task = TaskInput(description="生成视频", topic="   ")
 
@@ -250,17 +263,15 @@ def test_script_video_params_normalize_publish_fields() -> None:
         tags=[" #市场 ", "市场", "", "#财经"],
         douyin_account="  抖音账号  ",
         kuaishou_account="  快手账号  ",
-        tencent_account="  视频号账号  ",
     )
 
     assert request.description == "每日市场观察"
     assert request.tags == ["市场", "财经"]
     assert request.douyin_account == "抖音账号"
     assert request.kuaishou_account == "快手账号"
-    assert request.tencent_account == "视频号账号"
 
 
-@pytest.mark.parametrize("field", ["douyin_account", "kuaishou_account", "tencent_account"])
+@pytest.mark.parametrize("field", ["douyin_account", "kuaishou_account"])
 def test_script_video_params_reject_blank_publish_accounts(field: str) -> None:
     payload = {"title": "今日资讯", "script": "市场信息。" * 80, field: "   "}
 
@@ -272,7 +283,6 @@ def test_finance_params_normalize_text_fields() -> None:
     request = FinanceParams(
         douyin_account="  抖音账号  ",
         kuaishou_account="  快手账号  ",
-        tencent_account="  视频号账号  ",
         title="   ",
         description="  每日基金日报  ",
         tags=[" #基金 ", "基金", "", "#A股"],
@@ -280,13 +290,12 @@ def test_finance_params_normalize_text_fields() -> None:
 
     assert request.douyin_account == "抖音账号"
     assert request.kuaishou_account == "快手账号"
-    assert request.tencent_account == "视频号账号"
     assert request.title is None
     assert request.description == "每日基金日报"
     assert request.tags == ["基金", "A股"]
 
 
-@pytest.mark.parametrize("field", ["douyin_account", "kuaishou_account", "tencent_account"])
+@pytest.mark.parametrize("field", ["douyin_account", "kuaishou_account"])
 def test_finance_params_reject_blank_accounts(field: str) -> None:
     payload = {field: "   "}
 
@@ -326,7 +335,6 @@ def test_ai_briefing_params_normalize_text_fields() -> None:
     request = AiBriefingParams(
         douyin_account="  抖音账号  ",
         kuaishou_account="  快手账号  ",
-        tencent_account="  视频号账号  ",
         title="  AI早报  ",
         description="  今日AI简报  ",
         tags=[" #AI ", "AI", "", "#科技"],
@@ -334,7 +342,6 @@ def test_ai_briefing_params_normalize_text_fields() -> None:
 
     assert request.douyin_account == "抖音账号"
     assert request.kuaishou_account == "快手账号"
-    assert request.tencent_account == "视频号账号"
     assert request.title == "AI早报"
     assert request.description == "今日AI简报"
     assert request.tags == ["AI", "科技"]
@@ -363,7 +370,7 @@ def test_ai_briefing_params_reject_invalid_cover_boundaries(payload: dict[str, o
         AiBriefingParams.model_validate(payload)
 
 
-@pytest.mark.parametrize("field", ["douyin_account", "kuaishou_account", "tencent_account"])
+@pytest.mark.parametrize("field", ["douyin_account", "kuaishou_account"])
 def test_ai_briefing_params_reject_blank_required_accounts(field: str) -> None:
     payload = {field: "   "}
 

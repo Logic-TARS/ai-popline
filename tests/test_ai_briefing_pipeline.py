@@ -21,7 +21,15 @@ from content_pipeline.ai_briefing_pipeline import (
     validate_ai_briefing_narration,
 )
 from content_pipeline.job_store import JobStore
-from content_pipeline.models import AdapterResult, ErrorCode, JobStatus, PipelineStep, TaskInput, VideoValidation
+from content_pipeline.models import (
+    AdapterResult,
+    ErrorCode,
+    JobStatus,
+    PipelineStep,
+    PublishTarget,
+    TaskInput,
+    VideoValidation,
+)
 from content_pipeline.orchestrator import Orchestrator
 from content_pipeline.settings import Settings
 from content_pipeline.tools.narrated_mpt_client import NarratedMptResult
@@ -111,12 +119,12 @@ def test_builds_clean_90_second_script() -> None:
 def test_llm_narration_validation_rejects_bad_format() -> None:
     material = build_briefing_script_material(SAMPLE_ARTICLE, "20260720")
     valid = (
-        "2026年7月20日每日AI简报，今天的主线是国产模型集中亮相。Qwen发布新模型并开放权重，"
-        "编码和工具调用能力继续提升，开发者生态有望进一步扩大。Kimi也在多个前端编码任务中取得领先，"
+        "Qwen发布新模型并开放权重，国产模型集中亮相。2026年7月20日的AI简报关注编码和工具调用，"
+        "开发者生态有望进一步扩大。Kimi也在多个前端编码任务中取得领先，"
         "说明模型竞争正在从参数规模走向真实生产力。海外方面，Nvidia继续建设新一代AI工厂，CPU和GPU部署"
         "会支撑科研与企业应用。端侧小模型同步提速，多家厂商开始把AI能力推向消费级设备。监管层面，"
         "欧盟要求大型平台开放关键接口，智能体身份安全也被企业重点关注。整体看，AI竞争已经不只是单点模型"
-        "能力，而是基础设施、应用生态和监管规则的综合较量。接下来，谁能把能力稳定落到产品里，谁就更可能占据主动。对观众来说，今天最值得关注的不是单个发布会的热度，而是模型能力、算力供给、端侧落地和开放规则正在同时推进。这会影响下一阶段的产品竞争。"
+        "能力，而是基础设施、应用生态和监管规则的综合较量。接下来，谁能把能力稳定落到产品里，谁就更可能占据主动。对观众来说，今天最值得关注的不是单个发布会的热度，而是模型能力、算力供给、端侧落地和开放规则正在同时推进。这会影响下一阶段的产品竞争，也需要持续观察实际部署效果。"
     )
     validate_ai_briefing_narration(valid, material)
     with pytest.raises(Exception, match="markdown"):
@@ -206,18 +214,22 @@ def test_ai_briefing_llm_writer_uses_valid_script(tmp_path: Path, monkeypatch) -
     source = tmp_path / "briefings"
     day = _make_day(source)
     llm_script = (
-        "2026年7月20日每日AI简报，今天的主线是国产模型集中亮相。Qwen发布新模型并开放权重，"
-        "编码和工具调用能力继续提升，开发者生态有望进一步扩大。Kimi也在多个前端编码任务中取得领先，"
+        "Qwen发布新模型并开放权重，国产模型集中亮相。2026年7月20日的AI简报关注编码和工具调用，"
+        "开发者生态有望进一步扩大。Kimi也在多个前端编码任务中取得领先，"
         "说明模型竞争正在从参数规模走向真实生产力。海外方面，Nvidia继续建设新一代AI工厂，CPU和GPU部署"
         "会支撑科研与企业应用。端侧小模型同步提速，多家厂商开始把AI能力推向消费级设备。监管层面，"
         "欧盟要求大型平台开放关键接口，智能体身份安全也被企业重点关注。整体看，AI竞争已经不只是单点模型"
-        "能力，而是基础设施、应用生态和监管规则的综合较量。接下来，谁能把能力稳定落到产品里，谁就更可能占据主动。对观众来说，今天最值得关注的不是单个发布会的热度，而是模型能力、算力供给、端侧落地和开放规则正在同时推进。这会影响下一阶段的产品竞争。"
+        "能力，而是基础设施、应用生态和监管规则的综合较量。接下来，谁能把能力稳定落到产品里，谁就更可能占据主动。对观众来说，今天最值得关注的不是单个发布会的热度，而是模型能力、算力供给、端侧落地和开放规则正在同时推进。这会影响下一阶段的产品竞争，也需要持续观察实际部署效果。"
     )
     monkeypatch.setattr(
         "content_pipeline.script_generation.client.OpenAICompatibleScriptClient.complete",
         lambda _self, *, label, **_kwargs: (
             '{"mainline":"国产模型竞争","main_fact_id":"ai.summary","opening":"日期和主线","sections":["国内","海外"],"required_facts":["ai.summary","ai.focus.1","ai.focus.2"],"risk_close":null}'
             if label.endswith("plan")
+            else '{"text":"国产模型集中亮相","fact_ids":["ai.summary"]}'
+            if label.endswith("metadata title")
+            else '{"text":"国产模型集中发布新一代开源模型，编码与工具调用成为关注重点。海外基础设施建设、端侧应用和平台开放规则也在同步推进，需要持续观察实际部署效果。","fact_ids":["ai.summary"]}'
+            if label.endswith("metadata description")
             else llm_script
         ),
     )
@@ -274,7 +286,13 @@ def test_ai_briefing_llm_writer_fails_on_invalid_script(tmp_path: Path, monkeypa
         TaskInput(
             description="生成每日 AI 资讯视频",
             content_type="ai_briefing",
-            params={"date": "20260720", "handoff_wait_seconds": 0, "dry_run": True, "script_writer": "llm"},
+            params={
+                "date": "20260720",
+                "handoff_wait_seconds": 0,
+                "dry_run": True,
+                "script_writer": "llm",
+                "quality_gate": "strict",
+            },
         )
     )
     orchestrator.run(task_id)
@@ -302,8 +320,6 @@ def test_publish_targets_are_fixed_and_independent(tmp_path: Path, monkeypatch) 
         used_titles.append(title)
         if target.platform == "douyin":
             return {"success": True, "visibility": "private"}
-        if target.platform == "tencent":
-            return {"success": True, "delivery_status": "draft", "visibility": "draft"}
         raise RuntimeError("kuaishou failed")
 
     monkeypatch.setattr("content_pipeline.publishing.call_sau_target", fake_upload)
@@ -321,11 +337,11 @@ def test_publish_targets_are_fixed_and_independent(tmp_path: Path, monkeypatch) 
     assert snapshot.status == JobStatus.PARTIAL
     assert snapshot.artifacts.publish_results["douyin"]["success"] is True
     assert snapshot.artifacts.publish_results["kuaishou"]["success"] is False
-    assert snapshot.artifacts.publish_results["tencent"]["success"] is True
-    assert used_titles == ["国产模型集中亮相", "国产模型集中亮相", "国产模型集中亮相"]
+    assert "tencent" not in snapshot.artifacts.publish_results
+    assert used_titles == ["国产模型集中亮相", "国产模型集中亮相"]
 
 
-def test_explicit_tencent_target_adds_draft_and_mixed_delivery(tmp_path: Path, monkeypatch) -> None:
+def test_explicit_publish_targets_must_match_defaults(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "briefings"
     _make_day(source)
     settings = Settings(
@@ -336,8 +352,6 @@ def test_explicit_tencent_target_adds_draft_and_mixed_delivery(tmp_path: Path, m
     )
 
     def fake_upload(*, target, **kwargs):
-        if target.platform == "tencent":
-            return {"success": True, "delivery_status": "draft", "visibility": "draft"}
         return {"success": True, "visibility": "private"}
 
     monkeypatch.setattr("content_pipeline.publishing.call_sau_target", fake_upload)
@@ -347,25 +361,23 @@ def test_explicit_tencent_target_adds_draft_and_mixed_delivery(tmp_path: Path, m
             description="生成并发布每日 AI 资讯视频",
             content_type="ai_briefing",
             publish=True,
-            params={
-                "date": "20260720",
-                "handoff_wait_seconds": 0,
-                "dry_run": True,
-                "tencent_account": "破壁人Wallbreaker",
-            },
+            publish_targets=[
+                PublishTarget(platform="douyin", account="金融破壁人"),
+                PublishTarget(platform="kuaishou", account="搞AI的罗辑同学"),
+            ],
+            params={"date": "20260720", "handoff_wait_seconds": 0, "dry_run": True},
         )
     )
     orchestrator.run(task_id)
     snapshot = orchestrator.store.get(task_id)
 
     assert snapshot.status == JobStatus.SUCCEEDED
-    assert set(snapshot.artifacts.publish_results) == {"douyin", "kuaishou", "tencent"}
+    assert set(snapshot.artifacts.publish_results) == {"douyin", "kuaishou"}
     assert snapshot.artifacts.upload_result["delivery_states"] == {
         "douyin": "private",
         "kuaishou": "private",
-        "tencent": "draft",
     }
-    assert snapshot.artifacts.upload_result["visibility"] == "mixed"
+    assert snapshot.artifacts.upload_result["visibility"] == "private"
 
 
 def _mock_real_mpt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, calls: list[str]) -> None:
@@ -508,6 +520,40 @@ def test_ai_briefing_cover_uses_explicit_title_and_selected_dimensions(tmp_path:
     assert captured["params"].size == "landscape"
     assert captured["params"].template == "default"
     assert captured["params"].title_position == "left"
+
+
+def test_ai_briefing_video_pins_normal_voice_rate(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "briefings"
+    _make_day(source)
+    calls: list[str] = []
+    _mock_real_mpt(tmp_path, monkeypatch, calls)
+
+    captured: dict = {}
+    inner = ai_briefing_pipeline.call_narrated_mpt
+
+    def capturing_mpt(*args, **kwargs):
+        captured.update(kwargs)
+        return inner(*args, **kwargs)
+
+    monkeypatch.setattr(ai_briefing_pipeline, "call_narrated_mpt", capturing_mpt)
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path / "output",
+        ai_briefing_dir=source,
+        pipeline_defaults_file=tmp_path / "missing.yaml",
+    )
+    orchestrator = Orchestrator(settings=settings, store=JobStore(settings.data_dir))
+    task_id = orchestrator.submit(
+        TaskInput(
+            description="生成每日 AI 资讯视频",
+            content_type="ai_briefing",
+            params={"date": "20260720", "handoff_wait_seconds": 0},
+        )
+    )
+    orchestrator.run(task_id)
+
+    assert orchestrator.store.get(task_id).status == JobStatus.SUCCEEDED
+    assert captured["voice_rate"] == 1.0
 
 
 @pytest.mark.parametrize("failure", ["adapter", "dimensions"])

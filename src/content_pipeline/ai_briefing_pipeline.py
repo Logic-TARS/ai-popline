@@ -150,7 +150,7 @@ def build_video_title(title: str) -> str:
     return build_publish_title(title, max_chars=16)
 
 
-def build_briefing_script_material(markdown: str, date: str) -> dict[str, Any]:
+def build_briefing_script_material(markdown: str, date: str, *, duration_variant: str = "legacy_90_seconds") -> dict[str, Any]:
     meta = _frontmatter(markdown)
     focus = _section(markdown, "今日焦点")
     frontier = _section(markdown, "前沿动态")
@@ -172,16 +172,17 @@ def build_briefing_script_material(markdown: str, date: str) -> dict[str, Any]:
         "quick_items": quick_items,
         "conclusion_sentences": _first_sentences(conclusion, 2),
     }
-    material["fallback_script"] = _build_rule_briefing_script(material)
+    material["fallback_script"] = _build_rule_briefing_script(material, duration_variant=duration_variant)
     return material
 
 
-def _build_rule_briefing_script(material: dict[str, Any]) -> str:
-    parts: list[str] = [f"{material['date_text']}每日AI简报。"]
+def _build_rule_briefing_script(material: dict[str, Any], *, duration_variant: str = "legacy_90_seconds") -> str:
+    parts: list[str] = []
     summary = str(material.get("summary") or "")
     if summary:
         parts.append(summary.rstrip("。") + "。")
     focus_titles = [str(value) for value in material.get("focus_titles", [])[:2]]
+    parts.append(f"{material['date_text']}每日AI简报。")
     if focus_titles:
         parts.append("今日焦点包括" + "；".join(focus_titles) + "。")
     frontier_titles = [str(value) for value in material.get("frontier_titles", [])[:3]]
@@ -195,17 +196,18 @@ def _build_rule_briefing_script(material: dict[str, Any]) -> str:
         parts.append(conclusion_sentences[0].rstrip("。") + "。")
 
     script = "".join(dict.fromkeys(part for part in parts if part))
-    if len(script) < 350:
+    minimum, maximum = {"short_30_60": (180, 320), "long_1_3_minutes": (500, 800)}.get(duration_variant, (350, 500))
+    if len(script) < minimum:
         supplements = [str(value) for value in material.get("focus_sentences", [])]
         supplements += [str(value) for value in material.get("frontier_sentences", [])]
         for sentence in supplements:
             normalized = sentence.rstrip("。") + "。"
             if normalized not in script:
                 script += normalized
-            if len(script) >= 390:
+            if len(script) >= minimum + 40:
                 break
     script = re.sub(r"[。！？；]{2,}", "。", script)
-    return _trim_complete(script, 500)
+    return _trim_complete(script, maximum)
 
 
 def build_90_second_briefing_script(markdown: str, date: str) -> str:
@@ -449,13 +451,11 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
         handoff = normalize_handoff(raw_handoff, date=date, handoff_path=handoff_path, day_dir=day_dir)
         title = params.title or str(handoff["title"])
         status = _external_status(date, title, task_id, handoff)
-        if params.tencent_account:
-            status["steps"]["publish_tencent"] = "pending"
         _write_json(status_path, status)
         _append_jsonl(index_path, _handoff_event(handoff, status, "accepted"))
 
         markdown = article_path.read_text(encoding="utf-8-sig")
-        material = build_briefing_script_material(markdown, date)
+        material = build_briefing_script_material(markdown, date, duration_variant=params.duration_variant or "long_1_3_minutes")
         generator = ScriptGenerationService(settings)
         try:
             if params.script_writer == "llm":
@@ -639,8 +639,6 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
             PublishTarget(platform="douyin", account=params.douyin_account),
             PublishTarget(platform="kuaishou", account=params.kuaishou_account),
         ]
-        if params.tencent_account:
-            default_targets.append(PublishTarget(platform="tencent", account=params.tencent_account))
         targets = plan["targets"] or default_targets
         if snapshot.task.publish_targets:
             provided = [(target.platform, target.account) for target in snapshot.task.publish_targets]
@@ -648,7 +646,7 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
             if provided != expected:
                 raise ConfigError(f"ai briefing publish targets must be exactly: {expected}")
         if not plan["requested"]:
-            for key in ("publish_douyin", "publish_kuaishou", "publish_tencent"):
+            for key in ("publish_douyin", "publish_kuaishou"):
                 if key in status["steps"]:
                     status["steps"][key] = "skipped"
 

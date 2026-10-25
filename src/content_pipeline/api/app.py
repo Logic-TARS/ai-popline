@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -36,6 +37,7 @@ from content_pipeline.deferred_publishing import (
 )
 from content_pipeline.errors import ConfigError
 from content_pipeline.job_store import JobDeleteConflictError, utc_now
+from content_pipeline.maintenance import cleanup_cache
 from content_pipeline.models import (
     DeferredPublishInput,
     JobStatus,
@@ -58,6 +60,8 @@ from content_pipeline.settings import Settings, load_settings
 from content_pipeline.web import WEB_STATIC_DIR
 
 __all__ = ["create_app"]
+
+_logger = logging.getLogger(__name__)
 
 
 class LoginInput(BaseModel):
@@ -103,6 +107,12 @@ class PipelineDefaultsInput(BaseModel):
 
     enabled: bool = False
     pipelines: dict[str, Any] = Field(default_factory=dict)
+
+
+class CacheCleanupInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    apply: bool = False
 
 
 class RenameJobInput(BaseModel):
@@ -175,6 +185,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.schedule_store = schedule_store
         app.state.schedule_runner = schedule_runner
         schedule_runner.start()
+        try:
+            reaped = orchestrator.store.reap_orphaned_jobs()
+        except Exception:
+            _logger.warning("orphaned job reconciliation failed", exc_info=True)
+        else:
+            if reaped["reaped"]:
+                _logger.info("reaped %d orphaned jobs: %s", len(reaped["reaped"]), ", ".join(reaped["reaped"]))
         try:
             yield
         finally:
@@ -563,6 +580,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/account-status", tags=["settings"])
     def get_account_status() -> dict[str, Any]:
         return collect_account_status(resolved_settings)
+
+    @app.post("/maintenance/cache-cleanup", tags=["maintenance"])
+    def run_cache_cleanup(request: CacheCleanupInput) -> dict[str, Any]:
+        """Scan or delete regenerable caches under CACHE_CLEANUP_ROOT.
+
+        Paths in the response stay relative to the scanned root so the console never
+        receives absolute filesystem locations.
+        """
+        try:
+            report = cleanup_cache(resolved_settings.cache_cleanup_root, apply=request.apply)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "cache_cleanup_unavailable", "message": str(exc)},
+            ) from exc
+        return report.to_payload()
 
     @app.get("/jobs/{task_id}/publish-readiness", tags=["publishing"])
     def get_publish_readiness(task_id: str = Path(pattern=r"^[0-9a-f]{32}$")) -> dict[str, Any]:

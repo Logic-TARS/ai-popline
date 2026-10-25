@@ -15,7 +15,6 @@ __all__ = [
     "DOUYIN",
     "KUAISHOU",
     "PLATFORM_POLICIES",
-    "TENCENT",
     "XIAOHONGSHU",
     "PlatformPolicy",
     "get_policy",
@@ -60,13 +59,6 @@ BILIBILI = PlatformPolicy(
     ),
 )
 
-TENCENT = PlatformPolicy(
-    platform="tencent",
-    visibility_requirement="Save as draft only (never auto-publish)",
-    proof_required="SAU must confirm draft was saved, not published",
-    fail_closed_rule="If draft status is not confirmed, the target reports PUBLISH_FAILED.",
-)
-
 XIAOHONGSHU = PlatformPolicy(
     platform="xiaohongshu",
     visibility_requirement="支持 private（仅自己可见，默认）或 public（公开可见）",
@@ -78,9 +70,7 @@ XIAOHONGSHU = PlatformPolicy(
     ),
 )
 
-PLATFORM_POLICIES: dict[str, PlatformPolicy] = {
-    p.platform: p for p in [DOUYIN, KUAISHOU, BILIBILI, TENCENT, XIAOHONGSHU]
-}
+PLATFORM_POLICIES: dict[str, PlatformPolicy] = {p.platform: p for p in [DOUYIN, KUAISHOU, BILIBILI, XIAOHONGSHU]}
 
 
 def get_policy(platform: str) -> PlatformPolicy:

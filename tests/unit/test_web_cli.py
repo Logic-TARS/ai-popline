@@ -1,10 +1,14 @@
 import importlib
+import json
 import sys
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from content_pipeline.job_store import JobStore
+from content_pipeline.models import JobStatus, PipelineStep, TaskInput
 from content_pipeline.settings import Settings
 
 cli = importlib.import_module("content_pipeline.cli.main")
@@ -170,6 +174,8 @@ def test_serve_rejects_missing_tls_file(tmp_path: Path, monkeypatch: pytest.Monk
         ["ai-pipeline", "jobs", "events", "a" * 32, "--limit", "0"],
         ["ai-pipeline", "jobs", "cleanup", "--older-than-days", "0"],
         ["ai-pipeline", "jobs", "cleanup", "--older-than-days", "-1"],
+        ["ai-pipeline", "jobs", "reap", "--older-than-hours", "0"],
+        ["ai-pipeline", "jobs", "reap", "--older-than-hours", "-1"],
     ],
 )
 def test_jobs_commands_reject_non_positive_counts(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,6 +183,57 @@ def test_jobs_commands_reject_non_positive_counts(argv: list[str], monkeypatch: 
 
     with pytest.raises(SystemExit):
         cli.main()
+
+
+def test_jobs_delete_cli_deletes_terminal_jobs_and_exits_nonzero_when_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = Settings(_env_file=None, data_dir=tmp_path / "output")
+    store = JobStore(settings.data_dir)
+    terminal = store.create(TaskInput(description="可删除任务")).task_id
+    store.finish(terminal, JobStatus.SUCCEEDED)
+    running = store.create(TaskInput(description="运行中任务")).task_id
+    store.mark_running(running, PipelineStep.ROUTE)
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+
+    monkeypatch.setattr(sys, "argv", ["ai-pipeline", "jobs", "delete", terminal, running])
+    assert cli.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"deleted": [terminal], "not_found": [], "blocked": [running], "failed": []}
+    assert not store.job_dir(terminal).exists()
+
+    monkeypatch.setattr(sys, "argv", ["ai-pipeline", "jobs", "delete", running])
+    assert cli.main() == 1
+    assert json.loads(capsys.readouterr().out)["blocked"] == [running]
+
+    monkeypatch.setattr(sys, "argv", ["ai-pipeline", "jobs", "delete", terminal])
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["not_found"] == [terminal]
+
+
+def test_jobs_reap_cli_fails_orphaned_jobs_so_they_become_deletable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = Settings(_env_file=None, data_dir=tmp_path / "output")
+    store = JobStore(settings.data_dir)
+    orphaned = store.create(TaskInput(description="僵死排队任务")).task_id
+    active = store.create(TaskInput(description="活跃排队任务")).task_id
+    status_path = store.status_path(orphaned)
+    data = json.loads(status_path.read_text(encoding="utf-8"))
+    data["updated_at"] = (datetime.now(UTC) - timedelta(hours=7)).isoformat()
+    status_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(sys, "argv", ["ai-pipeline", "jobs", "reap"])
+
+    assert cli.main() == 0
+
+    assert json.loads(capsys.readouterr().out) == {"reaped": [orphaned], "skipped": [active]}
+    assert store.get(orphaned).status is JobStatus.FAILED
+    assert store.get(active).status is JobStatus.QUEUED
+
+    monkeypatch.setattr(sys, "argv", ["ai-pipeline", "jobs", "delete", orphaned])
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["deleted"] == [orphaned]
 
 
 @pytest.mark.parametrize(

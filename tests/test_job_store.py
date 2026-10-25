@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -119,6 +120,28 @@ def test_delete_job_removes_terminal_job_and_blocks_running_job(tmp_path: Path) 
     with pytest.raises(JobDeleteConflictError):
         store.delete_job(running)
     assert store.job_dir(running).exists()
+
+
+def test_finish_truncates_long_errors_so_status_stays_readable(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "output")
+    task_id = store.create(TaskInput(description="长错误")).task_id
+    store.finish(task_id, JobStatus.FAILED, "x" * 4104)
+    snapshot = store.get(task_id)
+    assert snapshot.status is JobStatus.FAILED
+    assert snapshot.error is not None
+    assert len(snapshot.error) <= 2000
+    assert "[错误信息已截断]" in snapshot.error
+    assert snapshot.error.endswith("x" * 10)
+
+
+def test_finish_keeps_the_tail_of_a_long_error(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "output")
+    task_id = store.create(TaskInput(description="长错误尾部")).task_id
+    store.finish(task_id, JobStatus.FAILED, "head" + "x" * 4000 + "final error line")
+    snapshot = store.get(task_id)
+    assert snapshot.error is not None
+    assert len(snapshot.error) <= 2000
+    assert snapshot.error.endswith("final error line")
 
 
 def test_job_store_rejects_symlinked_job_directory(tmp_path: Path) -> None:
@@ -322,3 +345,80 @@ def test_cleanup_old_jobs_skips_non_job_dirs_and_mismatched_status_files(tmp_pat
     assert mismatched_dir.exists()
     assert symlinked_dir.exists()
     assert outside.exists()
+
+
+def _backdate_updated_at(store: JobStore, task_id: str, seconds: int = 7 * 3600) -> None:
+    """Rewrite a persisted updated_at so staleness rules can be exercised."""
+    status_path = store.status_path(task_id)
+    data = json.loads(status_path.read_text(encoding="utf-8"))
+    data["updated_at"] = (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()
+    status_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_reap_orphaned_jobs_fails_jobs_whose_worker_is_gone(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "output")
+    queued = store.create(TaskInput(description="僵死排队任务")).task_id
+    running = store.create(TaskInput(description="僵死运行任务")).task_id
+    store.mark_running(running, PipelineStep.VIDEO)
+    finished = store.create(TaskInput(description="已完成任务")).task_id
+    store.finish(finished, JobStatus.SUCCEEDED)
+    non_job_dir = store.jobs_dir / "operator-notes"
+    non_job_dir.mkdir()
+    (non_job_dir / "status.json").write_text(store.status_path(queued).read_text(encoding="utf-8"), encoding="utf-8")
+    _backdate_updated_at(store, queued)
+    _backdate_updated_at(store, running)
+
+    result = store.reap_orphaned_jobs(max_age_seconds=21600)
+
+    assert sorted(result["reaped"]) == sorted([queued, running])
+    assert result["skipped"] == []
+    for task_id in (queued, running):
+        snapshot = store.get(task_id)
+        assert snapshot.status is JobStatus.FAILED
+        assert snapshot.error == "orphaned: no active worker"
+        assert snapshot.finished_at is not None
+        assert '"event": "job_reaped"' in store.events_path(task_id).read_text(encoding="utf-8")
+    assert store.get(queued).task.description == "僵死排队任务"
+    assert store.get(running).current_step is PipelineStep.VIDEO
+    assert store.get(finished).status is JobStatus.SUCCEEDED
+    assert non_job_dir.exists()
+
+
+def test_reap_orphaned_jobs_keeps_active_jobs_inside_the_age_window(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "output")
+    queued = store.create(TaskInput(description="活跃排队任务")).task_id
+    running = store.create(TaskInput(description="活跃运行任务")).task_id
+    store.mark_running(running, PipelineStep.ROUTE)
+
+    result = store.reap_orphaned_jobs(max_age_seconds=21600)
+
+    assert result["reaped"] == []
+    assert sorted(result["skipped"]) == sorted([queued, running])
+    assert store.get(queued).status is JobStatus.QUEUED
+    assert store.get(running).status is JobStatus.RUNNING
+
+
+def test_reaped_orphan_can_then_be_deleted(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "output")
+    task_id = store.create(TaskInput(description="僵死任务")).task_id
+    store.mark_running(task_id, PipelineStep.VIDEO)
+    _backdate_updated_at(store, task_id)
+
+    with pytest.raises(JobDeleteConflictError):
+        store.delete_job(task_id)
+
+    assert store.reap_orphaned_jobs(max_age_seconds=21600)["reaped"] == [task_id]
+
+    assert store.delete_jobs([task_id])["deleted"] == [task_id]
+    assert not store.job_dir(task_id).exists()
+
+
+@pytest.mark.parametrize("max_age_seconds", [0, -1])
+def test_reap_orphaned_jobs_rejects_non_positive_age(tmp_path: Path, max_age_seconds: int) -> None:
+    store = JobStore(tmp_path / "output")
+    task_id = store.create(TaskInput(description="活跃排队任务")).task_id
+
+    with pytest.raises(ValueError, match="max_age_seconds must be a positive integer"):
+        store.reap_orphaned_jobs(max_age_seconds=max_age_seconds)
+
+    assert store.get(task_id).status is JobStatus.QUEUED

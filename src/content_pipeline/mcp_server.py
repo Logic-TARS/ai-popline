@@ -199,10 +199,7 @@ async def list_capabilities() -> dict[str, Any]:
                 "tools": ["run_finance_video_async"],
                 "content_type": "finance",
                 "default_publish": False,
-                "publishing": (
-                    "Douyin/Kuaishou publishing with selectable visibility and Tencent draft publishing "
-                    "are supported for Finance."
-                ),
+                "publishing": ("Douyin/Kuaishou publishing with selectable visibility is supported for Finance."),
             },
         ],
         "status_tools": ["get_status", "get_job_events", "list_jobs"],

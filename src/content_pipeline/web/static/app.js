@@ -1012,17 +1012,11 @@ function addTargetRow(target = {}) {
   const platform = row.querySelector(".target-platform");
   const visibility = row.querySelector(".target-visibility");
   const updateTid = () => { row.querySelector(".target-tid-wrap").hidden = platform.value !== "bilibili"; };
-  const updateVisibility = () => {
-    const draftOnly = platform.value === "tencent";
-    visibility.disabled = draftOnly;
-    if (draftOnly) visibility.value = "private";
-  };
-  platform.addEventListener("change", () => { updateTid(); updateVisibility(); rememberCurrentTaskForm(); invalidatePreview(); });
+  platform.addEventListener("change", () => { updateTid(); rememberCurrentTaskForm(); invalidatePreview(); });
   visibility.addEventListener("change", () => { rememberCurrentTaskForm(); invalidatePreview(); });
   row.querySelector(".remove-target").addEventListener("click", () => { row.remove(); rememberCurrentTaskForm(); invalidatePreview(); });
   row.querySelectorAll("input").forEach((input) => input.addEventListener("input", () => { rememberCurrentTaskForm(); invalidatePreview(); }));
   updateTid();
-  updateVisibility();
   elements["publish-targets"].appendChild(row);
 }
 
@@ -1111,7 +1105,7 @@ function collectTask(checkValidity = true) {
     const account = row.querySelector(".target-account").value.trim();
     const tidValue = row.querySelector(".target-tid").value;
     if (!account) throw new Error("每个发布目标都必须填写账号。");
-    const target = { platform, account, visibility: platform === "tencent" ? "private" : row.querySelector(".target-visibility").value };
+    const target = { platform, account, visibility: row.querySelector(".target-visibility").value };
     if (platform === "bilibili") {
       if (!tidValue) throw new Error("Bilibili 发布目标必须填写分区 tid。");
       target.tid = Number(tidValue);
@@ -1274,12 +1268,12 @@ function closeJobPublishDialog() {
   if (elements["job-publish-dialog"].open) elements["job-publish-dialog"].close();
 }
 
-const DEFERRED_PLATFORM_HINTS = { douyin: "仅自己可见", kuaishou: "仅自己可见", tencent: "保存为草稿" };
+const DEFERRED_PLATFORM_HINTS = { douyin: "仅自己可见", kuaishou: "仅自己可见" };
 
 function deferredSupportedPlatforms() {
   return state.selectedPublishReadiness?.supported_platforms?.length
     ? state.selectedPublishReadiness.supported_platforms
-    : ["douyin", "kuaishou", "tencent"];
+    : ["douyin", "kuaishou"];
 }
 
 function deferredAccountOptions(platform) {
@@ -1319,24 +1313,16 @@ function addDeferredTargetRow(platform, account, visibility) {
   const visibilitySelect = row.querySelector(".deferred-target-visibility");
   const hint = row.querySelector(".deferred-target-hint");
   const syncHint = () => {
-    if (platformSelect.value === "tencent") { hint.textContent = DEFERRED_PLATFORM_HINTS.tencent; return; }
     hint.textContent = visibilitySelect.value === "public" ? "公开可见" : (DEFERRED_PLATFORM_HINTS[platformSelect.value] || "");
-  };
-  const syncVisibility = () => {
-    const draftOnly = platformSelect.value === "tencent";
-    visibilitySelect.disabled = draftOnly;
-    if (draftOnly) visibilitySelect.value = "private";
   };
   platformSelect.addEventListener("change", () => {
     renderDeferredAccountControl(row, platformSelect.value);
-    syncVisibility();
     syncHint();
     renderDeferredTargetSummary();
   });
   visibilitySelect.addEventListener("change", () => { syncHint(); renderDeferredTargetSummary(); });
   row.querySelector(".remove-target").addEventListener("click", () => { row.remove(); renderDeferredTargetSummary(); });
   renderDeferredAccountControl(row, selected, account);
-  syncVisibility();
   syncHint();
   elements["job-publish-targets"].appendChild(row);
   renderDeferredTargetSummary();
@@ -1352,9 +1338,9 @@ function renderPublishTargetSummary(container, targets) {
     container.innerHTML = "";
     return;
   }
-  const isPublicTarget = (target) => target.visibility === "public" && target.platform !== "tencent";
+  const isPublicTarget = (target) => target.visibility === "public";
   const items = targets.map((target) => {
-    const label = target.platform === "tencent" ? "保存为草稿" : (publicationVisibilityLabel(target.visibility) || "仅自己可见");
+    const label = publicationVisibilityLabel(target.visibility) || "仅自己可见";
     const account = target.account ? `（${escapeHtml(target.account)}）` : "";
     return `<li><span>${escapeHtml(platformLabel(target.platform))}${account}</span><strong${isPublicTarget(target) ? ' class="visibility-public"' : ""}>${escapeHtml(label)}</strong></li>`;
   }).join("");
@@ -1378,7 +1364,7 @@ function collectDeferredPublication() {
   elements["job-publish-targets"].querySelectorAll(".deferred-target-row").forEach((row) => {
     const platform = row.querySelector(".deferred-target-platform").value;
     const account = row.querySelector(".deferred-target-account").value.trim();
-    const visibility = platform === "tencent" ? "private" : row.querySelector(".deferred-target-visibility").value;
+    const visibility = row.querySelector(".deferred-target-visibility").value;
     if (!account) throw new Error(`请填写${platformLabel(platform)}账号。`);
     if (publishTargets.some((target) => target.platform === platform)) throw new Error("同一平台只能添加一次。");
     publishTargets.push({ platform, account, visibility });

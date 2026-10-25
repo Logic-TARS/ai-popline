@@ -100,7 +100,6 @@ All publishing defaults to OFF. `TaskInput.publish` must be explicitly `true`. V
 - **Douyin**: must prove the selected visibility ("仅自己可见" or "公开可见")
 - **Kuaishou**: must prove the selected visibility
 - **Bilibili**: private requires `SAU_BILIBILI_PRIVATE_ARGS=--is-only-self 1`; public omits the flag
-- **Tencent**: saves as draft only
 
 Fail-closed: any uncertainty → BLOCKED status.
 

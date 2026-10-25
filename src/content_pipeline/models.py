@@ -20,6 +20,8 @@ __all__ = [
     "DeferredPublishInput",
     "ErrorCode",
     "FinanceParams",
+    "DurationVariant",
+    "StrategyProfile",
     "GroupedAnimeParams",
     "ImageFileValidation",
     "ImageValidation",
@@ -28,6 +30,8 @@ __all__ = [
     "JobSnapshot",
     "JobStatus",
     "MediaValidation",
+    "MetadataAuditSummary",
+    "MetadataStageAuditSummary",
     "PipelineStep",
     "PublicationAttempt",
     "PublicationStatus",
@@ -52,6 +56,9 @@ ContentType = Literal[
     "script_video",
     "unknown",
 ]
+
+StrategyProfile = Literal["finance_conversion", "ai_reach"]
+DurationVariant = Literal["legacy_90_seconds", "short_30_60", "long_1_3_minutes"]
 
 
 def _normalize_required_text(value: str, field_name: str) -> str:
@@ -147,6 +154,7 @@ class AdapterResult(BaseModel):
 class PublishTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # "tencent" is retained only so historical job snapshots still validate.
     platform: Literal["douyin", "kuaishou", "bilibili", "tencent", "xiaohongshu"]
     account: str = Field(min_length=1, max_length=120)
     tid: int | None = Field(default=None, ge=1)
@@ -347,15 +355,22 @@ class FinanceParams(BaseModel):
 
     source_dir: Path | None = None
     date: str = "auto"
-    script_mode: Literal["90_seconds"] = "90_seconds"
+    script_mode: Literal["90_seconds", "short_30_60", "long_1_3_minutes"] = "90_seconds"
+    strategy_profile: Literal["finance_conversion"] = "finance_conversion"
+    experiment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    duration_variant: DurationVariant | None = None
     script_writer: Literal["rule", "llm"] = "rule"
     script_failure_policy: Literal["fail", "validated_rule_fallback"] = "fail"
     script_repair_attempts: int = Field(default=1, ge=0, le=2)
+    title_writer: Literal["follow_script", "rule", "llm"] = "follow_script"
+    description_writer: Literal["follow_script", "rule", "llm"] = "follow_script"
+    metadata_failure_policy: Literal["fail", "validated_rule_fallback"] = "fail"
+    metadata_repair_attempts: int = Field(default=1, ge=0, le=2)
+    quality_gate: Literal["strict", "soft"] = "soft"
     douyin_account: str = "金融破壁人"
-    kuaishou_account: str = "搞AI的罗辑同学"
-    tencent_account: str = "每日金融摘要"
+    kuaishou_account: str = "硅基思维TARS"
     title: str | None = None
-    description: str = "每日基金日报，仅供参考，不构成投资建议"
+    description: str = ""
     tags: list[str] = Field(default_factory=lambda: ["基金", "A股", "投资"])
     dry_run: bool = False
 
@@ -363,10 +378,15 @@ class FinanceParams(BaseModel):
     def normalize_text_fields(self) -> FinanceParams:
         self.douyin_account = _normalize_required_text(self.douyin_account, "publish account")
         self.kuaishou_account = _normalize_required_text(self.kuaishou_account, "publish account")
-        self.tencent_account = _normalize_required_text(self.tencent_account, "publish account")
         self.title = _normalize_optional_text(self.title)
+        self.experiment_id = _normalize_optional_text(self.experiment_id)
         self.description = self.description.strip()
         self.tags = _normalize_tags(self.tags)
+        self.duration_variant = self.duration_variant or {
+            "short_30_60": "short_30_60",
+            "90_seconds": "legacy_90_seconds",
+            "long_1_3_minutes": "long_1_3_minutes",
+        }[self.script_mode]
         return self
 
 
@@ -375,10 +395,18 @@ class AiBriefingParams(BaseModel):
 
     source_dir: Path | None = None
     date: str = "auto"
-    script_mode: Literal["90_seconds"] = "90_seconds"
+    script_mode: Literal["90_seconds", "short_30_60", "long_1_3_minutes"] = "90_seconds"
+    strategy_profile: Literal["ai_reach"] = "ai_reach"
+    experiment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    duration_variant: DurationVariant | None = None
     script_writer: Literal["rule", "llm"] = "rule"
     script_failure_policy: Literal["fail", "validated_rule_fallback"] = "fail"
     script_repair_attempts: int = Field(default=1, ge=0, le=2)
+    title_writer: Literal["follow_script", "rule", "llm"] = "follow_script"
+    description_writer: Literal["follow_script", "rule", "llm"] = "follow_script"
+    metadata_failure_policy: Literal["fail", "validated_rule_fallback"] = "fail"
+    metadata_repair_attempts: int = Field(default=1, ge=0, le=2)
+    quality_gate: Literal["strict", "soft"] = "soft"
     handoff_wait_seconds: int = Field(default=600, ge=0, le=3600)
     cover_size: Literal["landscape", "portrait", "story"] = "story"
     cover_template: Literal["default", "ai-poster"] = "ai-poster"
@@ -388,23 +416,26 @@ class AiBriefingParams(BaseModel):
     cover_background_position_x: float = Field(default=50.0, ge=0.0, le=100.0)
     cover_background_position_y: float = Field(default=50.0, ge=0.0, le=100.0)
     douyin_account: str = "金融破壁人"
-    kuaishou_account: str = "搞AI的罗辑同学"
-    tencent_account: str = "每日金融摘要"
+    kuaishou_account: str = "硅基思维TARS"
     title: str | None = None
-    description: str = "今日AI简报"
+    description: str = ""
     tags: list[str] = Field(default_factory=lambda: ["AI", "人工智能", "科技"])
     dry_run: bool = False
     force_regenerate: bool = False
-    voice_rate: float | None = Field(default=None, ge=0.55, le=1.2)
 
     @model_validator(mode="after")
     def normalize_text_fields(self) -> AiBriefingParams:
         self.douyin_account = _normalize_required_text(self.douyin_account, "publish account")
         self.kuaishou_account = _normalize_required_text(self.kuaishou_account, "publish account")
-        self.tencent_account = _normalize_required_text(self.tencent_account, "publish account")
         self.title = _normalize_optional_text(self.title)
+        self.experiment_id = _normalize_optional_text(self.experiment_id)
         self.description = self.description.strip()
         self.tags = _normalize_tags(self.tags)
+        self.duration_variant = self.duration_variant or {
+            "short_30_60": "short_30_60",
+            "90_seconds": "legacy_90_seconds",
+            "long_1_3_minutes": "long_1_3_minutes",
+        }[self.script_mode]
         return self
 
 
@@ -416,8 +447,7 @@ class ScriptVideoParams(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     douyin_account: str = "金融破壁人"
-    kuaishou_account: str = "搞AI的罗辑同学"
-    tencent_account: str = "每日金融摘要"
+    kuaishou_account: str = "硅基思维TARS"
     dry_run: bool = False
     force_regenerate: bool = False
     voice_rate: float | None = Field(default=None, ge=0.55, le=1.2)
@@ -440,7 +470,6 @@ class ScriptVideoParams(BaseModel):
         self.tags = _normalize_tags(self.tags)
         self.douyin_account = _normalize_required_text(self.douyin_account, "publish account")
         self.kuaishou_account = _normalize_required_text(self.kuaishou_account, "publish account")
-        self.tencent_account = _normalize_required_text(self.tencent_account, "publish account")
         return self
 
 
@@ -546,6 +575,24 @@ class AiArtGroupArtifact(BaseModel):
     error: str | None = Field(default=None, max_length=2000)
 
 
+class MetadataStageAuditSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["not_started", "running", "succeeded", "failed"]
+    generation_mode: str | None = Field(default=None, max_length=80)
+    quality_passed: bool | None = None
+    error_codes: list[str] = Field(default_factory=list, max_length=100)
+    warnings: list[str] = Field(default_factory=list, max_length=100)
+
+
+class MetadataAuditSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["running", "succeeded", "failed"]
+    title: MetadataStageAuditSummary
+    description: MetadataStageAuditSummary
+
+
 class ArtifactSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -563,6 +610,10 @@ class ArtifactSet(BaseModel):
     script_plan_path: Path | None = None
     script_attempts_path: Path | None = None
     script_quality_report_path: Path | None = None
+    final_title: str | None = None
+    final_description: str | None = None
+    metadata_audit: MetadataAuditSummary | None = None
+    metadata_audit_path: Path | None = None
     subtitle: Path | None = None
     mpt_task_dir: Path | None = None
     handoff_path: Path | None = None

@@ -29,9 +29,17 @@ pipelines:
       source_dir: "G:\\Job\\Automation-Output\\sajin\\fund-daily"
       date: auto
       script_mode: 90_seconds
+      strategy_profile: finance_conversion
+      experiment_id: null
       script_writer: llm
       script_failure_policy: fail
       script_repair_attempts: 1
+      title_writer: follow_script
+      description_writer: follow_script
+      metadata_failure_policy: fail
+      metadata_repair_attempts: 1
+      quality_gate: soft
+      description: ""
       dry_run: true
 
   ai_briefing:
@@ -40,9 +48,17 @@ pipelines:
       source_dir: "G:\\Hermes-Output\\每日AI简报"
       date: auto
       script_mode: 90_seconds
+      strategy_profile: ai_reach
+      experiment_id: null
       script_writer: llm
       script_failure_policy: fail
       script_repair_attempts: 1
+      title_writer: follow_script
+      description_writer: follow_script
+      metadata_failure_policy: fail
+      metadata_repair_attempts: 1
+      quality_gate: soft
+      description: ""
       handoff_wait_seconds: 0
       cover_size: story
       cover_template: ai-poster
@@ -88,3 +104,4 @@ pipelines:
       tags: ["动漫", "AI视频", "作品集"]
       group_size: 4
       seconds_per_image: 5
+

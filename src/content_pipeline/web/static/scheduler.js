@@ -8,6 +8,7 @@ window.TaskScheduler = (() => {
     getPublishEnabled: null,
     editingId: null,
     schedules: [],
+    cacheReport: null,
     loading: false,
     initialized: false,
   };
@@ -53,6 +54,8 @@ window.TaskScheduler = (() => {
     byId("pipeline-defaults-enabled").addEventListener("change", updatePipelineDefaultsSummary);
     byId("pipeline-defaults-rows").addEventListener("input", handleDefaultsInput);
     byId("refresh-account-status").addEventListener("click", refreshAccountStatus);
+    byId("scan-cache-button").addEventListener("click", scanCacheFiles);
+    byId("clean-cache-button").addEventListener("click", cleanCacheFiles);
   }
 
   function closeDialog() {
@@ -259,6 +262,7 @@ window.TaskScheduler = (() => {
     anime: "动漫视频",
   };
   const POLICY_PLATFORM_LABELS = { douyin: "抖音", kuaishou: "快手", tencent: "视频号", bilibili: "Bilibili", xiaohongshu: "小红书" };
+  const CACHE_CATEGORY_LABELS = { "python-cache": "Python 字节码", "tool-cache": "工具缓存", coverage: "覆盖率数据", "build-output": "构建产物", extra: "指定目录" };
 
   function setSettingsLoading(loading) {
     byId("settings-loading").hidden = !loading;
@@ -440,6 +444,76 @@ window.TaskScheduler = (() => {
       byId("account-status-rows").removeAttribute("aria-busy");
       button.disabled = false;
       button.textContent = originalText;
+    }
+  }
+
+  function formatBytes(size) {
+    const value = Number(size) || 0;
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  }
+
+  function renderCacheCleanup(data) {
+    scheduler.cacheReport = data || null;
+    const items = data?.items || [];
+    const failures = data?.failures || [];
+    const total = Number(data?.total) || 0;
+    const size = formatBytes(data?.total_size);
+    byId("cache-cleanup-summary").innerHTML = failures.length
+      ? `清理完成 · <strong>${failures.length}</strong> 项失败`
+      : (data?.applied
+        ? `已清理 <strong>${total}</strong> 项 · 释放 ${escapeHtml(size)}`
+        : `发现 <strong>${total}</strong> 项 · ${escapeHtml(size)}`);
+    byId("clean-cache-button").disabled = Boolean(data?.applied) || items.length === 0;
+    if (!items.length) {
+      byId("cache-cleanup-rows").innerHTML = `<p class="muted">${data?.applied ? "缓存已清理干净。" : "没有发现可清理的缓存。"}</p>`;
+      return;
+    }
+    const rows = items.map((item) => `<div class="cache-cleanup-row"><span class="cache-cleanup-category">${escapeHtml(CACHE_CATEGORY_LABELS[item.category] || item.category)}</span><code>${escapeHtml(item.path)}${item.is_dir ? "/" : ""}</code><span class="cache-cleanup-size">${escapeHtml(formatBytes(item.size))}</span></div>`);
+    const errors = failures.map((failure) => `<p class="cache-cleanup-failure">${escapeHtml(failure.path)}：${escapeHtml(failure.error)}</p>`);
+    byId("cache-cleanup-rows").innerHTML = rows.concat(errors).join("");
+  }
+
+  async function scanCacheFiles() {
+    const button = byId("scan-cache-button");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "扫描中…";
+    byId("clean-cache-button").disabled = true;
+    try {
+      renderCacheCleanup(await scheduler.request("/maintenance/cache-cleanup", { method: "POST", body: { apply: false } }));
+    } catch (error) {
+      scheduler.toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+
+  async function cleanCacheFiles() {
+    const pending = scheduler.cacheReport?.items?.length || 0;
+    if (!pending) {
+      scheduler.toast("请先扫描缓存再清理", "warning");
+      return;
+    }
+    const confirmed = window.confirm(`将删除 ${pending} 项缓存（约 ${formatBytes(scheduler.cacheReport.total_size)}），此操作不可撤销。确认继续？`);
+    if (!confirmed) return;
+    const button = byId("clean-cache-button");
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "清理中…";
+    try {
+      const data = await scheduler.request("/maintenance/cache-cleanup", { method: "POST", body: { apply: true } });
+      renderCacheCleanup(data);
+      const failures = data?.failures?.length || 0;
+      if (failures) scheduler.toast(`已清理 ${(Number(data?.total) || 0) - failures} 项，${failures} 项失败`, "warning");
+      else scheduler.toast(`已清理 ${Number(data?.total) || 0} 项缓存，释放 ${formatBytes(data?.total_size)}`, "success");
+    } catch (error) {
+      scheduler.toast(error.message, "error");
+    } finally {
+      button.textContent = originalText;
+      if (!scheduler.cacheReport?.applied) button.disabled = false;
     }
   }
 

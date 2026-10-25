@@ -193,7 +193,7 @@ Rules:
 
 ```json
 {
-  "platform": "douyin | kuaishou | bilibili | tencent",
+  "platform": "douyin | kuaishou | bilibili",
   "account": "account display name or identifier",
   "tid": 21,
   "visibility": "private | public"
@@ -207,7 +207,7 @@ Rules:
 - `visibility` defaults to `private` (仅自己可见). Set it to `public` to
   publish openly; both modes require uploader proof of the selected
   visibility, and changing it invalidates the publish confirmation
-  fingerprint. `tencent` ignores `visibility` and always saves a draft.
+  fingerprint.
 - Finance supports only Douyin and Kuaishou publishing in the current
   local contract.
 

@@ -468,6 +468,7 @@
           <button id="settings-tab-publish" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-publish" tabindex="0" data-settings-tab="publish"><span class="settings-tab-index">01</span><span><strong>发布策略</strong><small>内容类型与发布目标</small></span></button>
           <button id="settings-tab-defaults" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-defaults" tabindex="-1" data-settings-tab="defaults"><span class="settings-tab-index">02</span><span><strong>默认参数</strong><small>流水线 JSON 配置</small></span></button>
           <button id="settings-tab-accounts" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-accounts" tabindex="-1" data-settings-tab="accounts"><span class="settings-tab-index">03</span><span><strong>账号状态</strong><small>连接来源与可用性</small></span></button>
+          <button id="settings-tab-maintenance" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-maintenance" tabindex="-1" data-settings-tab="maintenance"><span class="settings-tab-index">04</span><span><strong>缓存维护</strong><small>扫描并清理缓存文件</small></span></button>
         </nav>
         <div class="settings-panels">
           <section id="settings-panel-publish" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-publish" data-settings-panel="publish">
@@ -492,6 +493,14 @@
               <span id="account-status-source">尚未加载账号来源</span>
             </div>
             <div id="account-status-rows" class="account-status-grid"><p class="muted">打开设置中心时加载。</p></div>
+          </section>
+          <section id="settings-panel-maintenance" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-maintenance" data-settings-panel="maintenance" hidden>
+            <header class="settings-panel-header"><div><p class="eyebrow">MAINTENANCE</p><h3>缓存维护</h3><p>只清理可再生的缓存（__pycache__、*.pyc、.pytest_cache、.ruff_cache、.coverage 等）。版本库、虚拟环境、output/、data/ 与 build/dist 一律不动，扫描不会删除任何文件。</p></div><div id="cache-cleanup-summary" class="settings-summary" aria-live="polite">尚未扫描</div></header>
+            <div class="cache-cleanup-actions">
+              <button id="scan-cache-button" class="button ghost compact" type="button">扫描缓存</button>
+              <button id="clean-cache-button" class="button danger compact" type="button" disabled>清理缓存</button>
+            </div>
+            <div id="cache-cleanup-rows" class="cache-cleanup-list" aria-live="polite"><p class="muted">点击「扫描缓存」查看可清理项。</p></div>
           </section>
         </div>
       </div>

@@ -102,6 +102,12 @@ def main() -> int:
     jobs_cleanup = jobs_subparsers.add_parser("cleanup", help="Delete old jobs")
     jobs_cleanup.add_argument("--older-than-days", type=_positive_int, default=30)
 
+    jobs_reap = jobs_subparsers.add_parser("reap", help="Fail queued or running jobs whose worker is gone")
+    jobs_reap.add_argument("--older-than-hours", type=_positive_int, default=6)
+
+    jobs_delete = jobs_subparsers.add_parser("delete", help="Delete stored jobs")
+    jobs_delete.add_argument("task_ids", nargs="+", metavar="task_id")
+
     args = parser.parse_args()
 
     if args.command == "doctor":
@@ -211,6 +217,16 @@ def _run_jobs_command(args: argparse.Namespace) -> int:
         removed = store.cleanup_old_jobs(max_age_days=args.older_than_days)
         print(json.dumps({"removed": removed}, ensure_ascii=False, indent=2))
         return 0
+
+    if args.jobs_command == "reap":
+        result = store.reap_orphaned_jobs(max_age_seconds=args.older_than_hours * 3600)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.jobs_command == "delete":
+        result = store.delete_jobs(args.task_ids)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 1 if result["blocked"] or result["failed"] else 0
 
     raise SystemExit("missing jobs subcommand")
 

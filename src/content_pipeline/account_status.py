@@ -17,7 +17,7 @@ from content_pipeline.settings import Settings
 
 __all__ = ["collect_account_status", "fetch_account_identities"]
 
-_COOKIE_PLATFORMS = ("douyin", "kuaishou", "tencent", "bilibili", "xiaohongshu")
+_COOKIE_PLATFORMS = ("douyin", "kuaishou", "bilibili", "xiaohongshu")
 
 ACCOUNT_IDENTITIES_CACHE_SECONDS = 60.0
 _account_identities_cache: tuple[str, float, dict[str, list[str]]] | None = None

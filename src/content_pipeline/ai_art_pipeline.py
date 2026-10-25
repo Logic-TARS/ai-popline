@@ -22,7 +22,7 @@ __all__ = ["run_ai_art_pipeline"]
         description="Photo-Process folder editing -> FFmpeg slideshow groups -> optional private publish",
         required_params=["source_dir", "process_name", "title"],
         external_tools=["Photo-Process", "ffmpeg"],
-        publish_targets=["douyin", "bilibili", "tencent"],
+        publish_targets=["douyin", "bilibili"],
     ),
 )
 def run_ai_art_pipeline(ctx: PipelineContext) -> None:

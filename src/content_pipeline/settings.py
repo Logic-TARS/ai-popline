@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     web_tls_certfile: Path | None = None
     web_tls_keyfile: Path | None = None
     web_allow_zerotier_http: bool = False
+    # Tree swept by the console "cache maintenance" action. Relative paths follow
+    # the data_dir convention, so the backend cleans the tree it was started from.
+    cache_cleanup_root: Path = Field(
+        default=Path("."),
+        validation_alias=AliasChoices("CACHE_CLEANUP_ROOT"),
+    )
 
     # Environment tag
     env: str = "development"

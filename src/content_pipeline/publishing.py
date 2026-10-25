@@ -19,7 +19,7 @@ from content_pipeline.tools.sau_client import call_sau_target
 
 __all__ = ["DEFAULT_SUPPORTED_PLATFORMS", "publish_generated_video", "publish_grouped_videos"]
 
-DEFAULT_SUPPORTED_PLATFORMS = frozenset({"douyin", "kuaishou", "tencent"})
+DEFAULT_SUPPORTED_PLATFORMS = frozenset({"douyin", "kuaishou"})
 
 
 def publish_generated_video(

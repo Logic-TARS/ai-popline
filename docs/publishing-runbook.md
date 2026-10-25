@@ -59,7 +59,7 @@ Only after the dry-run review passes:
 Completion evidence:
 - [ ] `status.json` has terminal status `succeeded` or documented `partial`.
 - [ ] `artifacts.publish_results` records each requested platform target and its visibility/draft proof.
-- [ ] Douyin/Kuaishou uploads include proof of the selected visibility; private Bilibili includes only-self proof; Tencent remains a draft.
+- [ ] Douyin/Kuaishou uploads include proof of the selected visibility; private Bilibili includes only-self proof.
 - [ ] Any failed target is recorded as `partial`, `failed`, or `blocked`; never treat missing proof as success.
 
 ## Platform-Specific Guides
@@ -97,22 +97,12 @@ Completion evidence:
 4. **Verify**: Private targets must include `--is-only-self 1` and are blocked if private args are missing; public targets omit the flag.
 5. **Rollback**: Delete from Bilibili Creator Center.
 
-### Tencent (腾讯/视频号)
-
-1. **Pre-flight**: Log into Tencent Creator account.
-2. **Publish**: Saved as draft only:
-   ```json
-   {"platform": "tencent", "account": "account-name"}
-   ```
-3. **Verify**: Confirm draft was saved. Manual review required before publishing.
-
 ## Safety Rules (Fail-Closed)
 
 - All publish defaults to `false`. Explicit `"publish": true` required.
 - Every target defaults to `"visibility": "private"`. Explicit `"visibility": "public"` publishes openly; the choice is part of the confirmation fingerprint.
 - Douyin/Kuaishou: must prove the selected visibility ("仅自己可见" or "公开可见").
 - Bilibili: private targets must pass `--is-only-self 1`, blocked if `SAU_BILIBILI_PRIVATE_ARGS` is missing; public targets omit the flag.
-- Tencent: saves as draft — never auto-publishes, and ignores `visibility`.
 - Any uncertainty → `BLOCKED` status. No silent publication.
 
 ## Troubleshooting

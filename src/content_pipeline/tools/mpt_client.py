@@ -46,10 +46,8 @@ def call_mpt(
     command = [
         str(settings.mpt_python),
         "cli.py",
-        "--video-subject",
-        subject,
-        "--video-script",
-        script,
+        f"--video-subject={subject}",
+        f"--video-script={script}",
         "--video-source",
         "local",
         "--video-materials",

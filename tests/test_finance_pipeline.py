@@ -19,6 +19,7 @@ from content_pipeline.finance_pipeline import (
 from content_pipeline.job_store import JobStore
 from content_pipeline.models import JobStatus, TaskInput
 from content_pipeline.orchestrator import Orchestrator
+from content_pipeline.script_generation import build_structured_facts, validate_script
 from content_pipeline.settings import Settings
 from content_pipeline.tools.common import mpt_task_id
 from content_pipeline.tools.finance_mpt_client import call_finance_mpt
@@ -88,6 +89,68 @@ SUMMARY_TABLE_MD = """# Cron Job: 每日基金日报
 """
 
 
+NEW_FORMAT_MD = """# Cron Job: 每日基金日报
+
+## Prompt
+
+运行 ttskill invoke，不要把这里读成旁白。
+
+## Response
+
+# 🎲 砂金 · A股收盘简报 · 2026-10-12（星期一）
+
+**数据日：2026-10-12（周一收盘）· 交易日**
+
+## 📌 顶部摘要
+
+**周五那根深V留的后手，今天开盘就被掀了一半。**
+
+## 📊 五指数表格（今日 2026-10-12 收盘）
+
+| 指数 | 点位 | 涨跌幅 | 成交额 | 年内涨幅 |
+|:-----|-----:|:-----:|-----:|:-----:|
+| 上证指数 | **3,797.24** | 🟥 **-0.43%**（-16.55点） | 7,149.1亿 | ≈ -4.32% |
+| 沪深300 | **4,287.98** | 🟥 **-0.68%**（-29.28点） | 4,055.7亿 | ≈ -7.39% |
+| 创业板指 | **2,963.82** | 🟥 **-2.61%**（-79.51点） | 3,923.3亿 | ≈ -7.47% |
+| 科创50 | **1,426.72** | 🟥 **-2.10%**（-30.54点） | 646.2亿 | ≈ +6.14% |
+| 深证成指 | **12,384.87** | 🟥 **-2.03%**（-256.99点） | 8,229.1亿 | ≈ -8.42% |
+
+## 🔄 今日板块轮动
+
+**🟢 领涨——防御整桌坐回来**
+
+- **银行（今日全场最强）**：**招商银行 +3.24%**（成交 43.6亿）｜**工商银行 +2.68%**（29.7亿）——**今天全数收回。**
+- **石油石化 / 煤炭**：**中国石油 +2.59%**（16.8亿）｜**中国神华 +2.02%**（18.8亿）——**红利端同步接棒。**
+
+**🟥 领跌——光模块整桌被端走**
+
+- **光模块 / 通信（全场最惨）**：**中际旭创 -6.41%**（成交 156.2亿）｜**新易盛 -6.10%**——**放量下杀。**
+- **半导体 / AI**：**海光信息 -2.77%**（82.9亿）｜**中芯国际 -1.60%**——**成长链整桌失血。**
+
+## ⚖️ 估值水位（09-30 口径 · 未随今日行情更新）
+
+| 指数 | PE-TTM | PE 近10年分位 | 判断 |
+|:-----|------:|------:|:-----|
+| 上证指数 | 15.53 | **76.28%** | 🟡 中等偏高 |
+| 创业板指 | 35.89 | **47.44%** | 🟢 适中 |
+| 科创50 | **128.85** | 71.74% | 🟡 中等偏高 |
+
+## 💛 黄金 & 债券
+
+- **内盘金**：EM Au99.99 = 902.9 元/克，-0.17%；Sina Au(T+D) = 902.56，-0.18%。
+- **债市**：中债 10Y 收益率 1.669%，较上周五下行约 -4.5BP。
+
+## 🔑 今日关键词
+
+1. **高低切换** — 不是轮动，是搬家。
+2. **缩量阴跌** — 没人卖，也没人买。
+
+## ♠️ 我的解读
+
+防御反攻、成长失血。面对市场波动，请结合自身投资经验审慎决策。
+"""
+
+
 def test_selects_today_then_yesterday_and_latest(tmp_path: Path) -> None:
     older = tmp_path / "2026-07-17_10-00-00.md"
     latest = tmp_path / "2026-07-17_18-00-00.md"
@@ -127,7 +190,69 @@ def test_extracts_response_and_builds_short_script() -> None:
     assert "院线" in script
     assert "集成电路封测" in script
     assert "风险承受能力" in script
+    assert script.startswith("-1.85%，上证指数报3,882.41点，直接跳水下跌1.85%。")
     assert script.endswith("不构成任何投资建议。")
+
+
+@pytest.mark.parametrize(
+    ("change", "action", "spoken"),
+    [
+        ("+1.85%", "强势拉升", "上涨1.85%"),
+        ("-1.85%", "直接跳水", "下跌1.85%"),
+        ("上涨1.85%", "强势拉升", "上涨1.85%"),
+        ("下跌1.85%", "直接跳水", "下跌1.85%"),
+        ("跌1.85%", "直接跳水", "下跌1.85%"),
+        ("持平", "平收横住", "持平"),
+        ("平收", "平收横住", "平收"),
+    ],
+)
+def test_daily_markdown_script_matches_opening_action_to_change_direction(
+    change: str, action: str, spoken: str
+) -> None:
+    response = SAMPLE_MD.replace("-1.85%", change, 1)
+    script = build_90_second_script(response, "2026-07-16")
+
+    assert script.startswith(f"{change}，上证指数报3,882.41点，{action}{spoken}。")
+    assert "平收横住下跌" not in script
+
+
+def test_parses_emoji_five_index_report_with_prose_sector_bullets() -> None:
+    response = extract_response(NEW_FORMAT_MD)
+    material = build_finance_script_material(response, "2026-10-12")
+
+    assert [row[0] for row in material["indices"]] == [
+        "上证指数",
+        "沪深300",
+        "创业板指",
+        "科创50",
+        "深证成指",
+    ]
+    assert material["indices"][0][2] == "-0.43%（-16.55点）"
+    assert [row[0] for row in material["sector_rows"][:2]] == ["银行", "光模块/通信"]
+    assert material["sector_rows"][0][1:] == ["招商银行+3.24%", "工商银行+2.68%"]
+    assert [
+        fact.subject
+        for fact in build_structured_facts("finance", material).facts
+        if fact.required and fact.kind == "sector"
+    ] == [
+        "银行",
+        "光模块/通信",
+    ]
+    assert "47.44%" in material["valuation"]
+    assert "35.8947" not in material["valuation"]
+
+
+def test_new_format_rule_script_binds_every_index_and_passes_quality_gate() -> None:
+    response = extract_response(NEW_FORMAT_MD)
+    material = build_finance_script_material(response, "2026-10-12")
+    script = build_90_second_script(response, "2026-10-12")
+
+    validate_finance_narration(script, material)
+    report = validate_script(script, build_structured_facts("finance", material), plan=None)
+
+    assert report.passed, [(issue.code, issue.evidence) for issue in report.errors]
+    for subject in ("上证指数", "沪深300", "创业板指", "科创50", "深证成指"):
+        assert subject in script
 
 
 def test_finance_llm_narration_validation_rejects_non_compliant_script() -> None:
@@ -148,7 +273,7 @@ def test_finance_llm_narration_validation_rejects_non_compliant_script() -> None
         validate_finance_narration(valid.replace("不要追涨杀跌", "满仓梭哈必涨"), material)
 
 
-def test_finance_llm_narration_allows_numbers_from_full_material() -> None:
+def test_finance_llm_narration_rejects_historical_trade_advice_despite_material_numbers() -> None:
     material = {
         "publication_date": "2026-07-21",
         "summary": "科技主线活跃，市场风险偏好回升。",
@@ -176,7 +301,8 @@ def test_finance_llm_narration_allows_numbers_from_full_material() -> None:
         "以上内容仅为市场信息整理和个人观点，不构成任何投资建议。"
     )
 
-    validate_finance_narration(script, material)
+    with pytest.raises(ConfigError, match="prohibited investment language"):
+        validate_finance_narration(script, material)
 
 
 def test_finance_llm_narration_rejects_numbers_outside_material() -> None:
@@ -317,7 +443,7 @@ def test_finance_orchestrator_uses_valid_llm_script(tmp_path: Path, monkeypatch)
     source_dir.mkdir()
     (source_dir / "2026-07-16_18-00-00.md").write_text(SAMPLE_MD, encoding="utf-8")
     llm_script = (
-        "2026年7月16日A股收盘观察。今天四大指数全线回落，上证指数报3882.41点，跌1.85%，"
+        "-1.85%，上证指数报3882.41点，直接跳水下跌。2026年7月16日A股收盘观察。今天四大指数全线回落，"
         "沪深300报4698.43点，跌1.84%，创业板指报3692.46点，跌2.95%，"
         "科创50报1846.88点，跌4.02%，说明高弹性方向承压明显。"
         "板块方面，院线逆势上涨6.42%，传媒影视受暑期档预期带动；集成电路封测下跌7.87%，"
@@ -330,6 +456,12 @@ def test_finance_orchestrator_uses_valid_llm_script(tmp_path: Path, monkeypatch)
         lambda _self, *, label, **_kwargs: (
             '{"mainline":"指数回落与板块分化","main_fact_id":"finance.index.1","opening":"日期和盘面","sections":["指数","板块","风险"],"required_facts":["finance.index.1","finance.index.2","finance.index.3","finance.index.4","finance.sector.1","finance.sector.2","finance.risk_note","finance.disclaimer"],"risk_close":"不构成投资建议"}'
             if label.endswith("plan")
+            else '{"text":"上证指数回落观察","fact_ids":["finance.index.1"]}'
+            if label.endswith("metadata title")
+            else '{"text":"上证指数下跌1.85%，四大指数全线回落，院线逆势走强，半导体方向承压。'
+            '后续仍需观察市场承接情况，注意市场波动风险，审慎决策，不构成投资建议。",'
+            '"fact_ids":["finance.index.1","finance.sector.1","finance.sector.2"]}'
+            if label.endswith("metadata description")
             else llm_script
         ),
     )
@@ -357,6 +489,12 @@ def test_finance_orchestrator_uses_valid_llm_script(tmp_path: Path, monkeypatch)
     assert snapshot.artifacts.script_quality_report_path and snapshot.artifacts.script_quality_report_path.is_file()
     event_names = {event["event"] for event in orchestrator.store.read_events(task_id)}
     assert {"script_plan", "script_draft", "script_quality_checked", "script_plan_generated"} <= event_names
+    quality_events = [
+        event for event in orchestrator.store.read_events(task_id) if event["event"] == "script_quality_checked"
+    ]
+    assert quality_events and {event["payload"]["gate"] for event in quality_events} == {"soft"}
+    assert snapshot.artifacts.script_generation_audit["quality_report"]["gate"] == "soft"
+    assert snapshot.artifacts.script_generation_audit["quality_report"]["passed"] is True
 
 
 def test_finance_orchestrator_fails_on_invalid_llm_script(tmp_path: Path, monkeypatch) -> None:
@@ -382,7 +520,12 @@ def test_finance_orchestrator_fails_on_invalid_llm_script(tmp_path: Path, monkey
         TaskInput(
             description="生成每日金融视频",
             content_type="finance",
-            params={"date": "2026-07-16", "dry_run": True, "script_writer": "llm"},
+            params={
+                "date": "2026-07-16",
+                "dry_run": True,
+                "script_writer": "llm",
+                "quality_gate": "strict",
+            },
         )
     )
     orchestrator.run(task_id)
@@ -450,8 +593,6 @@ def test_finance_publish_targets_are_independent(tmp_path: Path, monkeypatch) ->
     def fake_upload(*, target, **kwargs):
         if target.platform == "douyin":
             return {"success": True, "visibility": "private"}
-        if target.platform == "tencent":
-            return {"success": True, "delivery_status": "draft", "visibility": "draft"}
         raise RuntimeError("kuaishou failed")
 
     monkeypatch.setattr("content_pipeline.publishing.call_sau_target", fake_upload)
@@ -469,7 +610,7 @@ def test_finance_publish_targets_are_independent(tmp_path: Path, monkeypatch) ->
     assert snapshot.status == JobStatus.PARTIAL
     assert snapshot.artifacts.publish_results["douyin"]["success"] is True
     assert snapshot.artifacts.publish_results["kuaishou"]["success"] is False
-    assert snapshot.artifacts.publish_results["tencent"]["success"] is True
+    assert "tencent" not in snapshot.artifacts.publish_results
 
 
 def _run_finance_publish(tmp_path: Path, monkeypatch, publish_targets: list[dict[str, object]]):

@@ -181,7 +181,7 @@ def test_stale_check_warns(settings):
 
 def test_resolve_empty_ref_with_zero_accounts_raises_clear_error(settings):
     with pytest.raises(ConfigError) as excinfo:
-        resolve_publish_account(settings, "tencent", "")
+        resolve_publish_account(settings, "bilibili", "")
     message = str(excinfo.value)
     assert "sau accounts sync" in message
     assert "没有任何账号" in message

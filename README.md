@@ -29,13 +29,13 @@ AI Pipeline is a local-first content automation service for turning structured t
 | Pipeline | `content_type` | Input and flow | Local output | Optional publishing |
 | --- | --- | --- | --- | --- |
 | Anime | `anime` | Task script/topic → Gemini images → MPT video | Images and validated vertical MP4 | Bilibili |
-| Finance | `finance` | Daily Finance Markdown → validated 300–600-character narration → narrated MPT video | MP4, subtitles, script, generation audit, and validation evidence | Douyin, Kuaishou, Tencent draft |
-| AI Briefing | `ai_briefing` | Daily handoff/Markdown/text → validated 350–500-character narration → required cover → narrated MPT video | Cover PNG, MP4, subtitles, script audit, handoff status, and validation evidence | Douyin, Kuaishou, Tencent draft |
+| Finance | `finance` | Daily Finance Markdown → validated 300–600-character narration → narrated MPT video | MP4, subtitles, script, generation audit, and validation evidence | Douyin, Kuaishou |
+| AI Briefing | `ai_briefing` | Daily handoff/Markdown/text → validated 350–500-character narration → required cover → narrated MPT video | Cover PNG, MP4, subtitles, script audit, handoff status, and validation evidence | Douyin, Kuaishou |
 | AI Art | `ai_art` | Image folder → Photo-Process editing → grouped FFmpeg gallery videos | Processed images and one or more validated MP4 files | Douyin, Bilibili |
 | Xiaohongshu Image Note | `xhs_image_note` | Image folder → Photo-Process optimization | Validated processed images | None |
 | Grouped Anime | `grouped_anime` | Images grouped by filename prefix → one visual-only MPT video per group | Group videos, prepared music, and MPT artifacts | Douyin, Bilibili |
 | Japanese | `japanese` | Image folder → Photo-Process `日语视觉化` Gem | Validated processed images | None; publishing is ignored |
-| Script Video | `script_video` | Reviewed narration → narrated MPT video | MP4, subtitles, script, and validation evidence | Douyin, Kuaishou, Tencent draft |
+| Script Video | `script_video` | Reviewed narration → narrated MPT video | MP4, subtitles, script, and validation evidence | Douyin, Kuaishou |
 
 Run `ai-pipeline capabilities` to read the pipeline metadata exposed by the installed version.
 
@@ -276,6 +276,8 @@ The package installs the `ai-pipeline` command:
 | `ai-pipeline jobs list [--status STATUS] [--content-type TYPE] [--limit N]` | List recent jobs |
 | `ai-pipeline jobs show <task_id>` | Print a persisted job snapshot |
 | `ai-pipeline jobs events <task_id> [--limit N]` | Print recent audit events |
+| `ai-pipeline jobs reap [--older-than-hours N]` | Mark stale `queued` or `running` jobs as failed so they can be deleted |
+| `ai-pipeline jobs delete <task_id> [<task_id> ...]` | Delete one or more persisted jobs |
 | `ai-pipeline jobs cleanup --older-than-days N` | Delete old persisted jobs |
 
 `run` exits with code `0` for `succeeded` or `partial`; other terminal states return a non-zero code.
@@ -387,6 +389,8 @@ Treat `status.json`, `events.jsonl`, `artifacts.validation`, and `artifacts.publ
 
 Use `ai-pipeline jobs cleanup --older-than-days N` to remove old terminal job directories after their evidence has been archived according to the operator's retention policy. Cleanup skips `queued` and `running` jobs, and also skips jobs with an active deferred publication attempt, so in-flight generation or publishing evidence is not removed by age-based maintenance.
 
+A job whose worker died keeps its last persisted state, so a stale `queued` or `running` job can never be deleted through any other path. `ai-pipeline jobs reap --older-than-hours N` (default 6) rewrites such jobs to `failed` with `error: "orphaned: no active worker"` and appends a `job_reaped` event, after which `jobs delete` or `jobs cleanup` can remove them. The REST API also runs the same sweep once on startup.
+
 ## Publishing safety
 
 Publishing is always opt-in:
@@ -409,7 +413,6 @@ Each publish target defaults to `"visibility": "private"` (仅自己可见) and 
 | Douyin | The uploader must prove the selected visibility (`仅自己可见` or `公开可见`) |
 | Kuaishou | The uploader must prove the selected visibility |
 | Bilibili | Requires a `tid`; private requires verified `SAU_BILIBILI_PRIVATE_ARGS=--is-only-self 1` |
-| Tencent | Saved as a draft for manual review; not auto-published |
 
 Publishing targets are attempted independently where supported. One failed target can produce a `partial` job without discarding valid local artifacts or successful targets. Missing or ambiguous privacy evidence results in `blocked`, `failed`, or `partial` rather than silent success. File-hash deduplication also prevents accidental repeat uploads.
 

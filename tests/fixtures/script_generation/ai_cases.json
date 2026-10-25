@@ -1,0 +1,12 @@
+[
+  {
+    "name": "planned_attributed_release",
+    "material": {
+      "summary": "浏览器内 AI 编码工具进入测试阶段。",
+      "focus_titles": ["Claude in Chrome"],
+      "focus_sentences": ["报道称 Claude in Chrome 正在小范围测试，预计后续扩大覆盖。"]
+    },
+    "script": "浏览器内 AI 编码工具进入测试阶段。报道称 Claude in Chrome 正在小范围测试，预计后续扩大覆盖。",
+    "expected_issue_codes": ["length"]
+  }
+]

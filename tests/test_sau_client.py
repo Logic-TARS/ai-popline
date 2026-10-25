@@ -108,80 +108,19 @@ def test_bilibili_target_requires_tid() -> None:
         PublishTarget(platform="bilibili", account="default")
 
 
-def test_tencent_target_dry_run_is_draft_only(tmp_path: Path) -> None:
+def test_tencent_target_is_rejected(tmp_path: Path) -> None:
     video = tmp_path / "demo.mp4"
     video.write_bytes(b"x")
-    result = call_sau_target(
-        target=PublishTarget(platform="tencent", account="破壁人Wallbreaker"),
-        video=video,
-        title="视频号验收标题超过十六个字符",
-        desc="只保存草稿",
-        tags=["AI", "测试"],
-        settings=Settings(),
-        dry_run=True,
-    )
-
-    command = result["command"]
-    assert result["delivery_status"] == "draft"
-    assert result["visibility"] == "draft"
-    assert "--draft" in command
-    assert "--headed" in command
-    assert "--debug" in command
-    assert "--force" not in command
-    assert "--schedule" not in command
-    assert Path(command[command.index("--file") + 1]).is_absolute()
-    short_title = command[command.index("--short-title") + 1]
-    assert "-" not in short_title
-    assert len(short_title) <= 16
-
-
-def test_tencent_target_requires_draft_success_proof(tmp_path: Path, monkeypatch) -> None:
-    video = tmp_path / "demo.mp4"
-    video.write_bytes(b"x")
-
-    def fake_run_command(command, **kwargs):
-        import subprocess
-
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="saved", stderr="")
-
-    monkeypatch.setattr("content_pipeline.tools.sau_client.run_command", fake_run_command)
-    with pytest.raises(PrivateVisibilityUnsupportedError, match="Tencent"):
+    with pytest.raises(ConfigError, match="unsupported upload platform"):
         call_sau_target(
             target=PublishTarget(platform="tencent", account="破壁人Wallbreaker"),
             video=video,
-            title="title",
-            desc="desc",
-            tags=[],
+            title="视频号验收标题超过十六个字符",
+            desc="只保存草稿",
+            tags=["AI", "测试"],
             settings=Settings(),
+            dry_run=True,
         )
-
-
-def test_tencent_target_returns_draft_delivery_status(tmp_path: Path, monkeypatch) -> None:
-    video = tmp_path / "demo.mp4"
-    video.write_bytes(b"x")
-
-    def fake_run_command(command, **kwargs):
-        import subprocess
-
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="🥳 视频草稿保存成功\nTencent/WeChat Channels video draft saved",
-            stderr="",
-        )
-
-    monkeypatch.setattr("content_pipeline.tools.sau_client.run_command", fake_run_command)
-    result = call_sau_target(
-        target=PublishTarget(platform="tencent", account="破壁人Wallbreaker"),
-        video=video,
-        title="title",
-        desc="desc",
-        tags=[],
-        settings=Settings(),
-    )
-    assert result["delivery_status"] == "draft"
-    assert result["visibility"] == "draft"
-    assert result["draft_proof"] == "视频草稿保存成功"
 
 
 def test_dry_run_upload_does_not_require_private_args(tmp_path: Path) -> None:
@@ -342,7 +281,7 @@ def test_douyin_public_target_requires_public_visibility_proof(tmp_path: Path, m
         dry_run=True,
     )
     assert dry_run["visibility"] == "public"
-    assert dry_run["command"][-2:] == ["--visibility", "public"]
+    assert "--visibility" not in dry_run["command"]
 
     captured_command = None
 
@@ -367,7 +306,7 @@ def test_douyin_public_target_requires_public_visibility_proof(tmp_path: Path, m
         tags=["AI绘画"],
         settings=Settings(),
     )
-    assert captured_command[-2:] == ["--visibility", "public"]
+    assert "--visibility" not in captured_command
     assert result["visibility"] == "public"
     assert result["publication_proof"] == "视频发布成功"
     assert "private_visibility_proof" not in result
@@ -404,7 +343,7 @@ def test_kuaishou_public_target_requires_public_visibility_proof(tmp_path: Path,
         dry_run=True,
     )
     assert dry_run["visibility"] == "public"
-    assert dry_run["command"][-2:] == ["--visibility", "public"]
+    assert "--visibility" not in dry_run["command"]
 
     def fake_run_command(command, **kwargs):
         import subprocess

@@ -382,7 +382,7 @@ def test_smoke_testing_docs_cover_external_tool_troubleshooting() -> None:
     assert "PRIVATE_VISIBILITY_UNSUPPORTED" in docs
     assert "ALREADY_PUBLISHED" in docs
     assert "SAU_BILIBILI_PRIVATE_ARGS=--is-only-self 1" in docs
-    assert "Tencent require draft proof" in docs
+    assert "require Douyin/Kuaishou visibility proof" in docs
     assert "never treat missing proof as success" in docs
 
 

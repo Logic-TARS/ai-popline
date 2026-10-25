@@ -42,6 +42,7 @@ def record_script_attempt_event(store, task_id: str, attempt: GenerationAttempt)
                 "stage": attempt.stage,
                 "index": attempt.index,
                 "passed": attempt.quality_report.passed,
+                "gate": attempt.quality_report.gate,
                 "character_count": attempt.quality_report.character_count,
                 "issue_codes": [item.code for item in attempt.quality_report.issues],
             },
@@ -56,10 +57,11 @@ def record_script_generation_events(store, task_id: str, audit: ScriptGeneration
             {
                 "main_fact_id": audit.plan.main_fact_id,
                 "selected_fact_ids": audit.plan.required_facts,
-                "prompt_version": next(
-                    (item.prompt_version for item in audit.attempts if item.stage == "plan"),
-                    audit.prompt_version,
-                ),
+                "prompt_version": audit.plan_prompt_version
+                or next((item.prompt_version for item in audit.attempts if item.stage == "plan"), audit.prompt_version),
+                "quality_policy_version": audit.quality_policy_version,
+                "prompt_fingerprints": audit.prompt_fingerprints,
+                "within_recommended_length": audit.within_recommended_length,
             },
         )
     for attempt in audit.attempts:

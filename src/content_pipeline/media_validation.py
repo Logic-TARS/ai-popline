@@ -46,7 +46,7 @@ def validate_images(paths: list[Path], expected_count: int) -> ImageValidation:
     return ImageValidation(count=len(files), files=files)
 
 
-def validate_video(path: Path, expected_aspect: str, require_audio: bool) -> VideoValidation:
+def validate_video(path: Path, expected_aspect: str, require_audio: bool, allowed_duration: tuple[float, float] | None = None) -> VideoValidation:
     if not path.is_file() or path.stat().st_size == 0:
         raise MediaValidationError(f"generated video is missing or empty: {path}")
 

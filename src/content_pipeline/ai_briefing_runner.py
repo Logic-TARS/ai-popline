@@ -46,8 +46,7 @@ def main() -> int:
     targets = (
         [
             PublishTarget(platform="douyin", account="金融破壁人"),
-            PublishTarget(platform="kuaishou", account="搞AI的罗辑同学"),
-            PublishTarget(platform="tencent", account="每日金融摘要"),
+            PublishTarget(platform="kuaishou", account="硅基思维TARS"),
         ]
         if publish
         else []

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -63,16 +62,6 @@ def _already_published_result(error: ExternalToolError) -> dict[str, Any] | None
         "error": "上传工具命中本地发布历史去重，但平台未返回本次发布成功凭证。请检查平台后台，或绕过去重后重试。",
         "publication_proof": None,
     }
-
-
-def _tencent_short_title(title: str) -> str:
-    normalized = re.sub(r"[-_,，、]+", " ", title)
-    normalized = re.sub(
-        r"[^0-9A-Za-z\u4e00-\u9fff 《》“”‘’\"':：+？?%℃]",
-        "",
-        normalized,
-    )
-    return re.sub(r"\s+", " ", normalized).strip()[:16] or "视频草稿"
 
 
 def call_sau_xiaohongshu_note(
@@ -154,7 +143,7 @@ def call_sau_target(
     settings: Settings,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    if target.platform not in {"douyin", "kuaishou", "tencent", "bilibili"}:
+    if target.platform not in {"douyin", "kuaishou", "bilibili"}:
         raise ConfigError(f"unsupported upload platform: {target.platform}")
     account_identity = _resolve_account_identity(target.platform, target.account, settings)
     if not dry_run:
@@ -177,8 +166,6 @@ def call_sau_target(
         ]
         if tags:
             command.extend(["--tags", ",".join(tags)])
-        if target.visibility == "public":
-            command.extend(["--visibility", "public"])
         if dry_run:
             return {"success": True, "dry_run": True, "command": command, "visibility": target.visibility}
         try:
@@ -232,8 +219,6 @@ def call_sau_target(
         ]
         if tags:
             command.extend(["--tags", ",".join(tags)])
-        if target.visibility == "public":
-            command.extend(["--visibility", "public"])
         if dry_run:
             return {
                 "success": True,
@@ -273,51 +258,6 @@ def call_sau_target(
             "visibility": "private",
             "private_visibility_proof": "已设置为“仅自己可见”",
             "publication_proof": "视频发布成功",
-        }
-
-    if target.platform == "tencent":
-        command = [
-            str(settings.sau_exe),
-            "tencent",
-            "upload-video",
-            "--account",
-            account_identity,
-            "--file",
-            str(video.resolve()),
-            "--title",
-            title[:30],
-            "--short-title",
-            _tencent_short_title(title),
-            "--desc",
-            desc,
-            "--draft",
-            "--headed",
-            "--debug",
-        ]
-        if tags:
-            command.extend(["--tags", ",".join(tags)])
-        if dry_run:
-            return {
-                "success": True,
-                "dry_run": True,
-                "command": command,
-                "delivery_status": "draft",
-                "visibility": "draft",
-                "draft_proof": "skipped_in_dry_run",
-            }
-        result = run_command(command, cwd=settings.sau_dir, timeout=1800, retries=0)
-        output = "\n".join((result.stdout, result.stderr))
-        if "视频草稿保存成功" not in output:
-            raise PrivateVisibilityUnsupportedError(
-                "Tencent upload did not provide proof that the video was saved as a draft."
-            )
-        return {
-            "success": True,
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-            "delivery_status": "draft",
-            "visibility": "draft",
-            "draft_proof": "视频草稿保存成功",
         }
 
     if target.platform == "bilibili":

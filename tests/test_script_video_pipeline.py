@@ -89,14 +89,14 @@ def test_script_video_pipeline_rejects_local_file_references(tmp_path: Path) -> 
     assert "local file reference" in (snapshot.error or "")
 
 
-def test_script_video_pipeline_defaults_to_tencent_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_script_video_pipeline_defaults_to_douyin_and_kuaishou_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     settings = Settings(data_dir=tmp_path / "output", mpt_dir=tmp_path / "mpt")
     used_targets: list[str] = []
 
     def fake_upload(*, target, **kwargs):
         used_targets.append(target.platform)
-        if target.platform == "tencent":
-            return {"success": True, "delivery_status": "draft", "visibility": "draft"}
         return {"success": True, "visibility": "private"}
 
     monkeypatch.setattr("content_pipeline.publishing.call_sau_target", fake_upload)
@@ -114,12 +114,8 @@ def test_script_video_pipeline_defaults_to_tencent_publish(tmp_path: Path, monke
 
     snapshot = orchestrator.store.get(task_id)
     assert snapshot.status == JobStatus.SUCCEEDED
-    assert used_targets == ["douyin", "kuaishou", "tencent"]
-    assert snapshot.artifacts.publish_results["tencent"] == {
-        "success": True,
-        "delivery_status": "draft",
-        "visibility": "draft",
-    }
+    assert used_targets == ["douyin", "kuaishou"]
+    assert snapshot.artifacts.publish_results["douyin"]["visibility"] == "private"
 
 
 def _run_script_video_publish(

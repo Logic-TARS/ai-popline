@@ -18,6 +18,8 @@ from content_pipeline.content_studio.models import (
 from content_pipeline.content_studio.service import ContentStudioService
 from content_pipeline.content_studio.store import ContentDraftStore, DraftConflictError, DraftCorruptError
 from content_pipeline.content_studio.ttskill_client import TTSkillClient, TTSkillError
+from content_pipeline.finance_pipeline import build_finance_script_material
+from content_pipeline.script_generation import build_structured_facts, validate_script
 from content_pipeline.settings import Settings
 
 FINANCE_LLM_SCRIPT = (
@@ -30,7 +32,8 @@ FINANCE_LLM_SCRIPT = (
     "仍需观察量能变化。以上内容仅为市场信息整理和个人观点，不构成任何投资建议。"
 )
 FINANCE_DAILY_LLM_SCRIPT = (
-    "A股收盘观察，今天市场风险偏好明显修复。四大指数同步上涨，上证指数报3832.26点，涨0.72%，"
+    "3832.26点，上证指数上涨0.72%，直接硬拉。A股收盘观察，今天市场风险偏好明显修复。"
+    "四大指数同步上涨，上证指数报3832.26点，涨0.72%，"
     "沪深300报4588.20点，涨0.85%，创业板指报3343.96点，涨3.06%，科创50报1635.96点，涨2.99%，"
     "成长方向弹性更强。板块方面，传媒上涨6.00%，计算机上涨5.56%，通信上涨4.26%，AI算力链继续活跃；"
     "银行下跌1.38%，食品饮料下跌0.55%，红利防御方向阶段性回落。今天的关键词是高低切换、科技接力和量能放大。"
@@ -58,17 +61,28 @@ def stub_content_studio_llm(
         if label.endswith("plan"):
             payload = json.loads(user_prompt.split("事实包：\n", 1)[1])
             required = [fact["id"] for fact in payload["facts"] if fact["required"]]
-            main = required[0] if required else payload["facts"][0]["id"]
+            main = next(
+                (fact["id"] for fact in payload["facts"] if fact["kind"] == "index"),
+                required[0] if required else payload["facts"][0]["id"],
+            )
             if main not in required:
                 required.insert(0, main)
+            risk_facts = [fact for fact in payload["facts"] if fact["kind"] == "risk" and fact["required"]]
+            close_ids = [fact["id"] for fact in risk_facts]
+            script = ai_script if label.startswith("ai_briefing") else finance_script
             return json.dumps(
                 {
                     "mainline": "围绕核心事实展开",
                     "main_fact_id": main,
-                    "opening": "直接交代主线",
-                    "sections": ["核心事实", "影响与风险"],
+                    "opening": script.split("。", 1)[0] + "。",
+                    "sections": ["开场行情", "核心事实", "风险收尾"],
                     "required_facts": required,
-                    "risk_close": None,
+                    "risk_close": "".join(fact["text"] for fact in risk_facts) or None,
+                    "section_fact_ids": {
+                        "opening": [main],
+                        "main": [fact_id for fact_id in required if fact_id != main and fact_id not in close_ids],
+                        "close": close_ids,
+                    },
                 },
                 ensure_ascii=False,
             )
@@ -584,7 +598,7 @@ def test_ai_briefing_auto_script_rejects_overlong_draft(tmp_path: Path, monkeypa
     assert video_errors == []
 
 
-@pytest.mark.parametrize("script", ["短稿", "长稿" * 350])
+@pytest.mark.parametrize("script", ["短稿。", "长稿。" * 350])
 def test_content_studio_allows_scripts_outside_recommended_length(tmp_path: Path, script: str) -> None:
     service = ContentStudioService(Settings(data_dir=tmp_path))
     draft = ContentDraft(
@@ -641,6 +655,35 @@ def test_content_studio_still_blocks_placeholders_and_missing_finance_disclaimer
 
     assert any(expected_error in error for error in errors)
     assert all("300–600" not in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("template_id", "script", "expected_error"),
+    [
+        ("finance_90s", "走势变化仍需独立判断，不构成投资建议。", "财经口播稿必须包含市场风险提示"),
+        ("finance_90s", "建议买入。面对市场波动，请审慎决策。不构成投资建议。", "财经口播稿包含确定性或诱导性投资表述"),
+        ("ai_briefing_90s", "# 标题\n这是人工审核稿。", "正文不能包含 Markdown"),
+        ("ai_briefing_90s", "以下是口播稿：内容仍在核对", "正文不能包含解释性前缀"),
+        ("ai_briefing_90s", "人工审核稿（尚未结束。", "正文包含不配对的括号或引号"),
+    ],
+)
+def test_content_studio_blocks_reviewed_safety_and_format_errors(
+    tmp_path: Path, template_id: str, script: str, expected_error: str
+) -> None:
+    service = ContentStudioService(Settings(data_dir=tmp_path))
+    draft = ContentDraft(
+        draft_id="c" * 32,
+        template_id=template_id,
+        title="人工审核稿",
+        script=script,
+        status="ready",
+        research=[ResearchSource(source_id="source", label="资料", skill_id="AI_BRIEFING_HANDOFF", status="succeeded")],
+    )
+
+    errors = service.validate_for_video(draft)
+    service.shutdown()
+
+    assert any(expected_error in error for error in errors)
 
 
 def test_content_studio_still_blocks_empty_script_and_collecting_status(tmp_path: Path) -> None:
@@ -744,6 +787,8 @@ def test_finance_template_prefers_today_markdown_before_realtime_sources(tmp_pat
     assert [source.source_id for source in collected.research] == ["finance-daily", "gold", "bond", "macro-cn"]
     assert set(invoked) == {"TTFUND_GOLD_INFO", "TTFUND_BOND_MARKET", "TTFUND_MACRO_DATA"}
     assert collected.script == FINANCE_DAILY_LLM_SCRIPT
+    assert collected.script_generation["generation_mode"] == "llm"
+    assert collected.script_generation["quality_report"]["passed"] is True
     assert "不要读这里" not in collected.script
 
 
@@ -799,6 +844,8 @@ def test_finance_template_can_disable_realtime_sources(tmp_path: Path, monkeypat
     assert [source.source_id for source in collected.research] == ["finance-daily"]
     assert collected.research_error is None
     assert collected.script == FINANCE_DAILY_LLM_SCRIPT
+    assert collected.script_generation["generation_mode"] == "llm"
+    assert collected.script_generation["quality_report"]["passed"] is True
 
 
 def test_finance_refresh_updates_enabled_sources(tmp_path: Path, monkeypatch) -> None:
@@ -886,7 +933,7 @@ def test_finance_template_falls_back_to_rule_script_when_llm_misses_required_mar
     assert "资料已就绪，但自动初稿生成失败" not in (collected.research_error or "")
 
 
-def test_finance_template_uses_minimal_script_when_rule_fallback_build_fails(tmp_path: Path, monkeypatch) -> None:
+def test_finance_template_rejects_invalid_minimal_script_when_rule_fallback_fails(tmp_path: Path, monkeypatch) -> None:
     today = datetime.now().date().isoformat()
     source_root = tmp_path / "fund-daily"
     source_root.mkdir()
@@ -924,6 +971,23 @@ def test_finance_template_uses_minimal_script_when_rule_fallback_build_fails(tmp
     )
     stub_content_studio_llm(monkeypatch, finance_script=invalid_llm_script)
     service = ContentStudioService(Settings(data_dir=tmp_path / "output", finance_md_dir=source_root))
+    minimal_scripts: list[tuple[str, dict[str, object]]] = []
+    build_minimal = service._build_minimal_finance_daily_script
+
+    def capture_minimal(material: dict[str, object]) -> str:
+        script = build_minimal(material)
+        minimal_scripts.append((script, material))
+        return script
+
+    def material_without_rule_fallback(response: str, publication_date: str) -> dict[str, object]:
+        built = build_finance_script_material(response, publication_date)
+        return {**built, "fallback_script": "", "fallback_error": "rule fallback unavailable"}
+
+    monkeypatch.setattr(service, "_build_minimal_finance_daily_script", capture_minimal)
+    monkeypatch.setattr(
+        "content_pipeline.content_studio.service.build_finance_script_material",
+        material_without_rule_fallback,
+    )
     monkeypatch.setattr(
         service.client,
         "invoke",
@@ -940,15 +1004,24 @@ def test_finance_template_uses_minimal_script_when_rule_fallback_build_fails(tmp
     collected = service.store.get(draft.draft_id)
     service.shutdown()
 
-    assert collected.status == "ready"
-    assert collected.research_error is None
-    assert collected.script != invalid_llm_script
-    assert "指数方面" in collected.script
-    assert "板块方面" in collected.script
-    assert "上证指数报3894.42点" in collected.script
-    assert "石油石化中国石油" in collected.script
-    assert "风险承受能力" in collected.script
-    assert "不构成" in collected.script and "投资建议" in collected.script
+    assert collected.status == "failed"
+    assert "资料已就绪，但自动初稿生成失败" in collected.research_error
+    assert collected.script == ""
+    assert collected.research[0].status == "succeeded"
+    assert len(minimal_scripts) == 1
+    minimal_script, material = minimal_scripts[0]
+    assert "指数方面" in minimal_script
+    assert "板块方面" in minimal_script
+    assert "上证指数报3894.42点" in minimal_script
+    assert "石油石化中国石油" in minimal_script
+    assert "风险承受能力" in minimal_script
+    assert "不构成" in minimal_script and "投资建议" in minimal_script
+    report = validate_script(minimal_script, build_structured_facts("finance", material))
+    assert not report.passed
+    assert {issue.code for issue in report.errors} == {
+        "finance_opening_market_anchor_missing",
+        "finance_weak_opening",
+    }
 
 
 def test_finance_template_uses_yesterday_markdown_when_today_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -1012,6 +1085,8 @@ def test_finance_template_uses_yesterday_markdown_when_today_is_missing(tmp_path
     assert collected.research[0].status == "succeeded"
     assert sum(source.status == "failed" for source in collected.research) == 3
     assert collected.script == FINANCE_DAILY_LLM_SCRIPT
+    assert collected.script_generation["generation_mode"] == "llm"
+    assert collected.script_generation["quality_report"]["passed"] is True
 
 
 def test_finance_collection_repairs_old_draft_missing_daily_source(tmp_path: Path, monkeypatch) -> None:
@@ -1075,6 +1150,8 @@ def test_finance_collection_repairs_old_draft_missing_daily_source(tmp_path: Pat
     assert collected.research[0].data_as_of == today
     assert sum(source.status == "failed" for source in collected.research) == 3
     assert collected.script == FINANCE_DAILY_LLM_SCRIPT
+    assert collected.script_generation["generation_mode"] == "llm"
+    assert collected.script_generation["quality_report"]["passed"] is True
 
 
 def test_content_api_creates_draft_and_queues_dry_run_video(tmp_path: Path, monkeypatch) -> None:
@@ -1116,7 +1193,7 @@ def test_content_api_creates_draft_and_queues_dry_run_video(tmp_path: Path, monk
 
         ready = app.state.content_studio.store.mutate(draft["draft_id"], mark_ready)
         script = ("市场数据需要核对来源日期和统计口径，短期变化不能直接外推为长期趋势。" * 10)[:360]
-        script += "以上内容仅为市场信息整理，不构成投资建议。"
+        script += "面对市场波动，请结合自身风险承受能力审慎决策。以上内容仅为市场信息整理，不构成投资建议。"
         saved = client.patch(
             f"/content/drafts/{draft['draft_id']}",
             headers=headers,

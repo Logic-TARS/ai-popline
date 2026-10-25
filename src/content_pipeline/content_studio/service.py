@@ -19,7 +19,7 @@ from content_pipeline.finance_pipeline import (
     validate_finance_narration,
 )
 from content_pipeline.finance_script import build_structured_finance_script
-from content_pipeline.script_generation import ScriptGenerationService
+from content_pipeline.script_generation import ScriptGenerationService, build_structured_facts, validate_script
 from content_pipeline.settings import Settings
 from content_pipeline.tools.narrated_mpt_client import looks_like_file_reference
 
@@ -165,17 +165,31 @@ class ContentStudioService:
             errors.append("口播稿不能是文件路径或包含本地文件引用")
         if any(marker in script for marker in ("请根据左侧", "待补充", "TODO", "{{", "}}")):
             errors.append("口播稿仍包含未完成的占位内容")
-        if draft.template_id == "finance_90s":
-            if "不构成投资建议" not in script:
+        content_type = "finance_multi_asset" if draft.template_id == "finance_90s" else "ai_briefing"
+        material = (
+            {"modules": {"review": "人工审核稿"}, "risk_note": RISK_NOTE, "disclaimer": FINANCE_DISCLAIMER}
+            if draft.template_id == "finance_90s"
+            else {"summary": "人工审核稿"}
+        )
+        report = validate_script(
+            script, build_structured_facts(content_type, material), profile="reviewed", gate="strict"
+        )
+        for issue in report.errors:
+            if issue.code == "finance_disclaimer":
                 errors.append(f"口播稿必须包含风险提示：{FINANCE_DISCLAIMER}")
-            prohibited = (r"保证收益", r"稳赚", r"无风险", r"必涨", r"满仓", r"梭哈")
-            for pattern in prohibited:
-                for match in re.finditer(pattern, script):
-                    prefix = script[max(0, match.start() - 4) : match.start()]
-                    if re.search(r"(?:不要|不宜|不可|避免|切勿|不能|别)$", prefix):
-                        continue
-                    errors.append("财经口播稿包含确定性或诱导性投资表述")
-                    return errors
+            elif issue.code == "finance_risk_warning":
+                errors.append("财经口播稿必须包含市场风险提示")
+            elif issue.code == "finance_prohibited":
+                errors.append("财经口播稿包含确定性或诱导性投资表述")
+            elif issue.code in {
+                "file_path",
+                "markdown",
+                "explanation_prefix",
+                "sentence_end",
+                "punctuation",
+                "unbalanced_punctuation",
+            }:
+                errors.append(issue.message)
         return errors
 
     def collect_now(self, draft_id: str) -> None:

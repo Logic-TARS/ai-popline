@@ -10,7 +10,7 @@ from content_pipeline.errors import ExternalToolError
 from content_pipeline.settings import Settings
 from content_pipeline.tools.common import mpt_task_id
 from content_pipeline.tools.narrated_mpt_client import (
-    _briefing_voice_rate,
+    _adaptive_voice_rate,
     _guard_generated_subtitle,
     call_narrated_mpt,
 )
@@ -150,10 +150,12 @@ def test_narrated_mpt_reports_safe_milestones_from_streamed_output(tmp_path: Pat
     assert (85, "复制视频产物", "视频、字幕和生成清单已写入任务目录", False) in updates
 
 
-def test_briefing_voice_rate_targets_ninety_seconds() -> None:
-    assert _briefing_voice_rate("x" * 482) == 0.82
-    assert 0.55 <= _briefing_voice_rate("x" * 350) <= 1.0
-    assert 0.55 <= _briefing_voice_rate("x" * 500) <= 1.0
+@pytest.mark.parametrize(
+    ("characters", "expected"),
+    [(1, 0.55), (350, 0.6), (482, 0.82), (500, 0.85), (1000, 1.2)],
+)
+def test_adaptive_voice_rate_targets_90_seconds_with_bounded_adaptation(characters: int, expected: float) -> None:
+    assert _adaptive_voice_rate("x" * characters) == expected
 
 
 def test_voice_rate_is_part_of_reuse_identity(tmp_path: Path, monkeypatch) -> None:

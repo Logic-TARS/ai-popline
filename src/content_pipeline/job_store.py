@@ -4,7 +4,7 @@ import json
 import re
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -41,9 +41,39 @@ def _safe_progress_text(value: str) -> str:
     return re.sub(r"(?:[A-Za-z]:[\\/][^\s\"']+|/(?:[^\s\"']+/)+[^\s\"']+)", "[已隐藏路径]", value)
 
 
+_MAX_ERROR_CHARS = 2000
+_TRUNCATION_NOTICE = "...[错误信息已截断]..."
+
+
+def _safe_error_text(value: str | None) -> str | None:
+    """Keep persisted errors inside the JobSnapshot limit so status.json stays readable.
+
+    Both ends are kept: the first lines explain how the work started, and the final
+    lines usually carry the actual failure reason for external-tool output.
+    """
+    if value is None:
+        return None
+    if len(value) <= _MAX_ERROR_CHARS:
+        return value
+    budget = _MAX_ERROR_CHARS - len(_TRUNCATION_NOTICE)
+    head = budget // 2
+    return value[:head] + _TRUNCATION_NOTICE + value[-(budget - head) :]
+
+
 def _validate_task_id(task_id: str) -> None:
     if not _TASK_ID_PATTERN.fullmatch(task_id):
         raise FileNotFoundError(f"job not found: {task_id}")
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    """Parse a persisted ISO timestamp, treating naive values as UTC."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 class JobStore:
@@ -189,10 +219,10 @@ class JobStore:
         snapshot.current_step = (
             PipelineStep.COMPLETE if status in {JobStatus.SUCCEEDED, JobStatus.PARTIAL} else snapshot.current_step
         )
-        snapshot.error = error
+        snapshot.error = _safe_error_text(error)
         snapshot.finished_at = utc_now()
         self.save(snapshot)
-        self.event(task_id, "job_finished", {"status": status.value, "error": error})
+        self.event(task_id, "job_finished", {"status": status.value, "error": _safe_error_text(error)})
 
     # ------------------------------------------------------------------
     # Deferred publication helpers
@@ -256,7 +286,7 @@ class JobStore:
         with self._lock:
             snapshot, attempt = self._publication_attempt(task_id, attempt_id)
             attempt.status = status  # type: ignore[assignment]
-            attempt.error = error
+            attempt.error = _safe_error_text(error)
             attempt.finished_at = utc_now()
             self.save(snapshot)
             self.event(
@@ -381,6 +411,53 @@ class JobStore:
                 _rmtree(job_dir)
                 removed += 1
         return removed
+
+    def reap_orphaned_jobs(self, max_age_seconds: int = 21600) -> dict[str, list[str]]:
+        """Fail queued or running jobs whose worker is no longer alive.
+
+        A job whose worker thread died keeps its queued/running status forever, which makes it
+        undeletable through every supported path. Anything left untouched for longer than
+        *max_age_seconds* is assumed orphaned and rewritten as a failed terminal job.
+        """
+        if max_age_seconds < 1:
+            raise ValueError("max_age_seconds must be a positive integer")
+        cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
+        error = "orphaned: no active worker"
+        result: dict[str, list[str]] = {"reaped": [], "skipped": []}
+        with self._lock:
+            for job_dir in self.jobs_dir.iterdir():
+                if job_dir.is_symlink() or not job_dir.is_dir():
+                    continue
+                if not _TASK_ID_PATTERN.fullmatch(job_dir.name):
+                    continue
+                status_file = job_dir / "status.json"
+                if not status_file.exists():
+                    continue
+                try:
+                    snapshot = JobSnapshot.model_validate_json(status_file.read_text(encoding="utf-8"))
+                    updated_at = _parse_timestamp(snapshot.updated_at) or datetime.fromtimestamp(
+                        status_file.stat().st_mtime, tz=UTC
+                    )
+                except (OSError, ValueError):
+                    continue
+                if snapshot.task_id != job_dir.name:
+                    continue
+                if snapshot.status not in {JobStatus.QUEUED, JobStatus.RUNNING}:
+                    continue
+                if updated_at > cutoff:
+                    result["skipped"].append(snapshot.task_id)
+                    continue
+                snapshot.status = JobStatus.FAILED
+                snapshot.error = _safe_error_text(error)
+                snapshot.finished_at = utc_now()
+                self.save(snapshot)
+                self.event(
+                    snapshot.task_id,
+                    "job_reaped",
+                    {"status": JobStatus.FAILED.value, "error": error, "max_age_seconds": max_age_seconds},
+                )
+                result["reaped"].append(snapshot.task_id)
+        return result
 
 
 def _rmtree(path: Path) -> None:

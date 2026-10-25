@@ -9,7 +9,14 @@ from pydantic import ValidationError
 from content_pipeline.api.app import create_app, task_fingerprint
 from content_pipeline.api.artifacts import registered_artifacts
 from content_pipeline.api.security import WebSecurity
-from content_pipeline.models import ArtifactSet, JobSnapshot, JobStatus, TaskInput
+from content_pipeline.models import (
+    ArtifactSet,
+    JobSnapshot,
+    JobStatus,
+    MetadataAuditSummary,
+    MetadataStageAuditSummary,
+    TaskInput,
+)
 from content_pipeline.settings import Settings
 
 security_module = importlib.import_module("content_pipeline.api.security")
@@ -422,6 +429,41 @@ def test_artifact_endpoint_serves_only_registered_files_inside_job(tmp_path: Pat
     assert {artifact["relative_path"] for artifact in artifacts} == {"video/preview.mp4"}
     assert downloaded.content == b"video-bytes"
     assert invalid_id.status_code in {404, 422}
+
+
+def test_metadata_audit_is_downloadable_but_not_embedded_in_job_api_responses(tmp_path: Path) -> None:
+    app = create_app(_settings(tmp_path))
+    store = app.state.orchestrator.store
+    snapshot = store.create(TaskInput(description="metadata audit", content_type="anime"))
+    audit_path = store.job_dir(snapshot.task_id) / "metadata_audit.json"
+    audit_body = '{"facts":["private fact"],"attempts":[{"text":"candidate","prompt_sha256":"fingerprint"}]}'
+    audit_path.write_text(audit_body, encoding="utf-8")
+    snapshot.artifacts.metadata_audit_path = audit_path
+    snapshot.artifacts.metadata_audit = MetadataAuditSummary(
+        status="failed",
+        title=MetadataStageAuditSummary(
+            status="failed", generation_mode="llm", quality_passed=False, error_codes=["invalid_json_contract"]
+        ),
+        description=MetadataStageAuditSummary(status="not_started"),
+    )
+    store.save(snapshot)
+
+    with TestClient(app, base_url="http://testserver", client=("127.0.0.1", 50000)) as client:
+        responses = [
+            client.get(f"/status/{snapshot.task_id}", headers=_bearer()),
+            client.get(f"/jobs/{snapshot.task_id}", headers=_bearer()),
+            client.get("/jobs", headers=_bearer()),
+        ]
+        listing = client.get(f"/jobs/{snapshot.task_id}/artifacts", headers=_bearer())
+        artifact = next(item for item in listing.json()["artifacts"] if item["relative_path"] == "metadata_audit.json")
+        downloaded = client.get(artifact["url"], headers=_bearer())
+
+    for response in responses:
+        assert response.status_code == 200
+        assert "private fact" not in response.text
+        assert "candidate" not in response.text
+        assert "fingerprint" not in response.text
+    assert downloaded.text == audit_body
 
 
 def test_artifact_endpoint_rejects_symlinked_job_directory(tmp_path: Path) -> None:

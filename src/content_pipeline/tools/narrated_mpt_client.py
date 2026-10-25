@@ -65,10 +65,10 @@ def validate_spoken_subtitle(path: Path) -> None:
         raise MediaValidationError(f"subtitle is unusable or looks like a file path: {path}")
 
 
-def _has_valid_narrated_artifacts(video: Path, subtitle: Path) -> bool:
+def _has_valid_narrated_artifacts(video: Path, subtitle: Path, allowed_duration: tuple[float, float] | None = None) -> bool:
     try:
         validate_spoken_subtitle(subtitle)
-        validate_video(video, expected_aspect="9:16", require_audio=True)
+        validate_video(video, expected_aspect="9:16", require_audio=True, allowed_duration=allowed_duration)
     except MediaValidationError:
         return False
     return True
@@ -82,21 +82,31 @@ def _guard_generated_subtitle(subtitle: Path, task_dir: Path) -> Path:
     return resolved_subtitle
 
 
-def _briefing_voice_rate(script: str) -> float:
-    """Choose a TTS rate that keeps the recommended 300-600 character script near 90s."""
-    # Measured on the installed zh-CN-YunxiNeural voice: 482 chars at 1.0
-    # produced 74.04s. The bounded estimate also handles scripts outside the
-    # recommended range without imposing a hard length limit.
+def _adaptive_voice_rate(script: str, target_duration_seconds: float = 90.0) -> float:
+    """Fallback TTS rate for callers that leave the rate unset, paced toward a target duration.
+
+    The finance and AI briefing pipelines pin an explicit rate, so this only serves
+    callers that pass ``voice_rate=None``.
+    """
     estimated_seconds_at_normal = len(script) * (74.04 / 482)
-    return round(max(0.55, min(1.0, estimated_seconds_at_normal / 90.0)), 2)
+    return round(max(0.55, min(1.2, estimated_seconds_at_normal / target_duration_seconds)), 2)
 
 
-def _identity(title: str, script: str, input_hashes: dict[str, str] | None, voice_rate: float) -> dict[str, object]:
+def _identity(
+    title: str,
+    script: str,
+    input_hashes: dict[str, str] | None,
+    voice_rate: float,
+    target_duration_seconds: float,
+    generation_metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
     return {
         "title": title,
         "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest(),
         "input_sha256": dict(sorted((input_hashes or {}).items())),
         "voice_rate": voice_rate,
+        "target_duration_seconds": target_duration_seconds,
+        "generation_metadata": dict(sorted((generation_metadata or {}).items())),
     }
 
 
@@ -135,6 +145,9 @@ def call_narrated_mpt(
     force_regenerate: bool = False,
     input_hashes: dict[str, str] | None = None,
     voice_rate: float | None = None,
+    target_duration_seconds: float = 90.0,
+    allowed_duration: tuple[float, float] | None = None,
+    generation_metadata: dict[str, object] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> NarratedMptResult:
     if looks_like_file_reference(script):
@@ -152,8 +165,12 @@ def call_narrated_mpt(
     target_manifest = output_dir / "generation_manifest.json"
     task_manifest = task_dir / "ai-pipeline-manifest.json"
     legacy_task_manifest = task_dir / "ai-popline-manifest.json"
-    resolved_voice_rate = voice_rate if voice_rate is not None else _briefing_voice_rate(script)
-    identity = _identity(title, script, input_hashes, resolved_voice_rate)
+    resolved_voice_rate = (
+        voice_rate if voice_rate is not None else _adaptive_voice_rate(script, target_duration_seconds)
+    )
+    identity = _identity(
+        title, script, input_hashes, resolved_voice_rate, target_duration_seconds, generation_metadata
+    )
 
     if (
         not force_regenerate
@@ -216,10 +233,8 @@ def call_narrated_mpt(
     command = [
         str(settings.mpt_python),
         "cli.py",
-        "--video-subject",
-        title,
-        "--video-script",
-        script,
+        f"--video-subject={title}",
+        f"--video-script={script}",
         "--video-source",
         "pexels",
         "--video-aspect",

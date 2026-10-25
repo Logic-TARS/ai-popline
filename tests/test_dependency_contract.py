@@ -572,7 +572,6 @@ def test_core_publishing_package_exports_policy_contract() -> None:
         DOUYIN,
         KUAISHOU,
         PLATFORM_POLICIES,
-        TENCENT,
         XIAOHONGSHU,
         PlatformPolicy,
         get_policy,
@@ -582,7 +581,6 @@ def test_core_publishing_package_exports_policy_contract() -> None:
     from content_pipeline.core.publishing.policy import DOUYIN as POLICY_DOUYIN
     from content_pipeline.core.publishing.policy import KUAISHOU as POLICY_KUAISHOU
     from content_pipeline.core.publishing.policy import PLATFORM_POLICIES as POLICY_PLATFORM_POLICIES
-    from content_pipeline.core.publishing.policy import TENCENT as POLICY_TENCENT
     from content_pipeline.core.publishing.policy import XIAOHONGSHU as POLICY_XIAOHONGSHU
     from content_pipeline.core.publishing.policy import PlatformPolicy as PolicyPlatformPolicy
     from content_pipeline.core.publishing.policy import get_policy as policy_get_policy
@@ -593,12 +591,12 @@ def test_core_publishing_package_exports_policy_contract() -> None:
     assert DOUYIN is POLICY_DOUYIN
     assert KUAISHOU is POLICY_KUAISHOU
     assert PLATFORM_POLICIES is POLICY_PLATFORM_POLICIES
-    assert TENCENT is POLICY_TENCENT
     assert XIAOHONGSHU is POLICY_XIAOHONGSHU
     assert PlatformPolicy is PolicyPlatformPolicy
     assert get_policy is policy_get_policy
     assert validate_publish_request is policy_validate_publish_request
     assert get_policy("xiaohongshu") is XIAOHONGSHU
+    assert "tencent" not in PLATFORM_POLICIES
 
 
 def test_pipelines_package_exports_registry_contract() -> None:

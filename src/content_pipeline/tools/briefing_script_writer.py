@@ -9,6 +9,7 @@ from content_pipeline.script_generation.prompts import (
     FINANCE_PROMPT_VERSION,
     build_draft_prompts,
 )
+from content_pipeline.script_generation.quality import validate_script
 from content_pipeline.script_generation.service import build_structured_facts
 from content_pipeline.settings import Settings
 
@@ -31,11 +32,11 @@ def rewrite_ai_briefing_script_with_llm(
     facts = build_structured_facts("ai_briefing", material)
     plan = _compatibility_plan(facts, material, finance=False)
     system_prompt, user_prompt = build_draft_prompts(facts, plan)
-    return OpenAICompatibleScriptClient(settings, timeout=timeout).complete(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        label="AI briefing script",
+    script = OpenAICompatibleScriptClient(settings, timeout=timeout).complete(
+        system_prompt=system_prompt, user_prompt=user_prompt, label="AI briefing script"
     )
+    _validate_compatibility_output(script, facts, plan)
+    return script
 
 
 def rewrite_finance_script_with_llm(
@@ -47,11 +48,17 @@ def rewrite_finance_script_with_llm(
     facts = build_structured_facts("finance", material)
     plan = _compatibility_plan(facts, material, finance=True)
     system_prompt, user_prompt = build_draft_prompts(facts, plan)
-    return OpenAICompatibleScriptClient(settings, timeout=timeout).complete(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        label="finance script",
+    script = OpenAICompatibleScriptClient(settings, timeout=timeout).complete(
+        system_prompt=system_prompt, user_prompt=user_prompt, label="finance script"
     )
+    _validate_compatibility_output(script, facts, plan)
+    return script
+
+
+def _validate_compatibility_output(script: str, facts, plan: ScriptPlan) -> None:
+    report = validate_script(script, facts, plan=plan)
+    if not report.passed:
+        raise ValueError("; ".join(f"{issue.code}: {issue.message}" for issue in report.errors))
 
 
 def _compatibility_plan(facts, material: dict[str, Any], *, finance: bool) -> ScriptPlan:
@@ -69,4 +76,10 @@ def _compatibility_plan(facts, material: dict[str, Any], *, finance: bool) -> Sc
         risk_close=str(material.get("risk_note") or material.get("disclaimer") or "")[:400] or None
         if finance
         else None,
+        section_fact_ids={
+            "opening": [main_fact_id],
+            "main": required_ids,
+            "support": [],
+            "close": [item for item in required_ids if item.endswith(("risk_note", "disclaimer"))],
+        },
     )

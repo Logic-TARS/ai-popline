@@ -4,6 +4,8 @@ import re
 from datetime import date
 from typing import Any
 
+from content_pipeline.script_generation.policy import get_policy
+from content_pipeline.script_generation.quality import extract_number_tokens
 from content_pipeline.tools.narrated_mpt_client import looks_like_file_reference
 
 __all__ = [
@@ -26,10 +28,8 @@ __all__ = [
 CONTENT_STUDIO_FINANCE_DISCLAIMER = "以上内容仅为市场信息整理，不构成投资建议。"
 DAILY_FINANCE_DISCLAIMER = "以上内容仅为市场信息整理和个人观点，不构成任何投资建议。"
 FINANCE_RISK_NOTE = "面对市场波动，请结合自身投资期限、仓位水平和风险承受能力审慎决策。"
-FINANCE_MIN_CHARS = 300
-FINANCE_MAX_CHARS = 600
-CONTENT_STUDIO_MIN_CHARS = 300
-CONTENT_STUDIO_MAX_CHARS = 600
+FINANCE_MIN_CHARS, FINANCE_MAX_CHARS = get_policy("finance").hard_length
+CONTENT_STUDIO_MIN_CHARS, CONTENT_STUDIO_MAX_CHARS = get_policy("finance_multi_asset").hard_length
 GENERIC_FILLER_MARKERS = (
     "资料不完整时",
     "黄金通常同时受到",
@@ -43,8 +43,11 @@ GENERIC_FILLER_MARKERS = (
 FINANCE_SECTION_LABELS = (
     "顶部摘要",
     "四大指数",
+    "四指数",
     "四指数行情",
     "四指数表格",
+    "五指数",
+    "五指数表格",
     "板块轮动",
     "估值水位",
     "今日关键词",
@@ -68,8 +71,30 @@ def clean_markdown(value: str) -> str:
     value = re.sub(r"\[([^]]+)]\([^)]*\)", r"\1", value)
     value = re.sub(r"[`*_>#]", "", value)
     value = re.sub(r"^[|\s]+|[|\s]+$", "", value)
-    value = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9%+\-.,，。；：:、（）()/$≈]", "", value)
+    value = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9%+\-.,，。；：:、（）()/$≈=~]", "", value)
     return re.sub(r"\s+", "", value).strip("，。； ")
+
+
+def _bullet_text(line: str) -> str:
+    return re.sub(r"^[-•·]+\s*", "", clean_markdown(line))
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    clipped = value[:limit]
+    stop = max(clipped.rfind(mark) for mark in "。；！？")
+    if stop >= limit - 60:
+        return clipped[: stop + 1]
+    trailing_number = re.search(r"[+-]?\d+(?:\.\d+)?%?$", clipped)
+    if trailing_number:
+        clipped = clipped[: trailing_number.start()]
+    return clipped.rstrip("，。；、:：")
+
+
+def _section_text(section: str, limit: int) -> str:
+    lines = [_bullet_text(line) for line in section.splitlines() if not re.search(r"\|\s*:?-{2,}", line)]
+    return _truncate_text("；".join(line for line in lines if line), limit).rstrip("；")
 
 
 def trim_complete(value: str, limit: int) -> str:
@@ -89,6 +114,8 @@ def _section(markdown: str, *keywords: str) -> str:
     headings = []
     for heading in candidates:
         title = clean_markdown(heading.group(1) or heading.group(2))
+        if heading.group(1) is None and (len(title) > 40 or any(mark in title for mark in "。！？")):
+            continue
         if any(label in title for label in FINANCE_SECTION_LABELS):
             headings.append((heading, title))
     for index, (heading, title) in enumerate(headings):
@@ -98,15 +125,97 @@ def _section(markdown: str, *keywords: str) -> str:
     return ""
 
 
+def _table_row(line: str) -> list[str] | None:
+    stripped = line.strip()
+    if not stripped.startswith("|") or re.search(r"\|\s*:?-{2,}", stripped):
+        return None
+    cells = [clean_markdown(cell) for cell in stripped.strip("|").split("|")]
+    if not cells or cells[0] in {"指数", "板块", "品种"}:
+        return None
+    return cells
+
+
 def _table_rows(section: str) -> list[list[str]]:
     rows: list[list[str]] = []
     for line in section.splitlines():
-        if not line.strip().startswith("|") or re.search(r"\|\s*:?-{2,}", line):
-            continue
-        cells = [clean_markdown(cell) for cell in line.strip().strip("|").split("|")]
-        if cells and cells[0] not in {"指数", "板块", "品种"}:
-            rows.append(cells)
+        row = _table_row(line)
+        if row is not None:
+            rows.append(row)
     return rows
+
+
+def _table_text(section: str) -> str:
+    header: list[str] = []
+    rows: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or re.search(r"\|\s*:?-{2,}", stripped):
+            continue
+        cells = [clean_markdown(cell) for cell in stripped.strip("|").split("|")]
+        if not cells:
+            continue
+        if cells[0] in {"指数", "板块", "品种"}:
+            header = cells
+            continue
+        labels = header[1:]
+        parts = [cells[0]]
+        for index, cell in enumerate(cells[1:]):
+            label = labels[index] if index < len(labels) else ""
+            parts.append(f"{label} {cell}" if label and not cell.startswith(label) else cell)
+        rows.append(" ".join(part for part in parts if part))
+    return "；".join(rows)
+
+
+def _sector_bullet_row(line: str) -> list[str] | None:
+    match = re.match(r"^([^：:（）()]{2,24})(?:（[^）]*）)?[：:](.+)$", _bullet_text(line))
+    if not match:
+        return None
+    stocks = [
+        f"{name}{change}"
+        for name, change in re.findall(r"([\u4e00-\u9fffA-Za-z]{2,12})([+-]\d+(?:\.\d+)?%)", match.group(2))
+        if not name.endswith(("涨", "跌"))
+    ]
+    if not stocks:
+        return None
+    return [match.group(1), *stocks]
+
+
+def _sector_row(line: str) -> list[str] | None:
+    row = _table_row(line)
+    if row is None:
+        return _sector_bullet_row(line)
+    if any(cell in {"代表个股", "涨幅", "跌幅", "涨跌幅"} for cell in row[1:]):
+        return None
+    if not re.search(r"\d+(?:\.\d+)?%", " ".join(row[1:])):
+        return None
+    return row
+
+
+def _sector_groups(section: str) -> dict[str, list[list[str]]]:
+    groups: dict[str, list[list[str]]] = {"up": [], "down": [], "": []}
+    direction = ""
+    for line in section.splitlines():
+        row = _sector_row(line)
+        if row is not None:
+            groups[direction].append(row)
+            continue
+        title = clean_markdown(line)
+        if "领涨" in title:
+            direction = "up"
+        elif "领跌" in title:
+            direction = "down"
+    return groups
+
+
+def _sector_rows(section: str) -> list[list[str]]:
+    groups = _sector_groups(section)
+    up, down = groups["up"], groups["down"]
+    rows: list[list[str]] = []
+    for index in range(max(len(up), len(down))):
+        for group in (up, down):
+            if index < len(group):
+                rows.append(group[index])
+    return rows + groups[""]
 
 
 def _summary_table(markdown: str) -> dict[str, str]:
@@ -131,6 +240,10 @@ def _first_sentence(value: str) -> str:
     return next((part.strip() for part in parts if part.strip()), cleaned)
 
 
+def _first_sentences(value: str, limit: int) -> list[str]:
+    return _sentence_parts(clean_markdown(value))[:limit]
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -151,6 +264,61 @@ def _number_text(value: Any, *, suffix: str = "") -> str:
     if value is None or value == "":
         return ""
     return f"{value}{suffix}"
+
+
+def _change_direction(value: str) -> str:
+    text = str(value).strip()
+    if text.startswith("+") or "上涨" in text or "涨" in text:
+        return "up"
+    if text.startswith("-") or "下跌" in text or "跌" in text:
+        return "down"
+    return "flat"
+
+
+def _spoken_change(value: str) -> str:
+    text = str(value).strip()
+    direction = _change_direction(text)
+    if direction == "up":
+        if text.startswith("+"):
+            return "上涨" + text[1:]
+        return text if "上涨" in text else "上涨" + text.lstrip("涨")
+    if direction == "down":
+        if text.startswith("-"):
+            return "下跌" + text[1:]
+        return text if "下跌" in text else "下跌" + text.lstrip("跌")
+    return text if any(marker in text for marker in ("持平", "平收")) else "持平"
+
+
+def _change_cell(value: str) -> str:
+    match = re.match(r"\s*([+-]?\d+(?:\.\d+)?(?:%|个百分点|点))", str(value))
+    return match.group(1) if match else str(value).strip()
+
+
+def _row_change(row: list[str]) -> str:
+    for cell in row[1:]:
+        match = re.search(r"[+-]?\d+(?:\.\d+)?(?:%|个百分点|点)", cell)
+        if match:
+            return match.group()
+    return ""
+
+
+def _change_phrase(value: str) -> str:
+    change = _change_cell(value)
+    if _change_direction(change) == "flat" and not any(marker in change for marker in ("持平", "平收")):
+        return f"涨跌幅{change}"
+    return _spoken_change(change)
+
+
+def _sector_phrase(row: list[str]) -> str:
+    change = _row_change(row)
+    return f"{row[0]}{_spoken_change(change)}" if change else row[0]
+
+
+def _cross_asset_text(section: str, limit: int) -> str:
+    bullets = [_bullet_text(line) for line in section.splitlines()]
+    gold = next((text for text in bullets if text and "债" not in text), "")
+    bond = next((text for text in bullets if "债" in text), "")
+    return "；".join(_truncate_text(text, limit) for text in (gold, bond) if text)
 
 
 def _append_until(parts: list[str], candidates: list[str], min_chars: int, tail: str) -> None:
@@ -216,6 +384,212 @@ def validate_daily_finance_script(script: str) -> None:
         raise FinanceScriptError("finance narration is missing required index or sector market information")
 
 
+_SIGN_UNSAFE_CHARS = ("−", "–", "－", "±")
+_HYPE_WORDS = ("炸裂", "封神", "颠覆", "硬拉", "跳水", "被砸", "杀跌", "强反差")
+_TRADE_NEGATIONS = ("不要", "不宜", "不可", "避免", "切勿", "不能", "别", "不")
+_INDEX_LABELS = {3: "三大指数", 4: "四大指数", 5: "五大指数"}
+_INDEX_SECTION_KEYWORDS = ("四大指数", "四指数", "五指数")
+_HEADING_SECTIONS = {
+    "signals": ("今日关键词", "三个信号", "核心信号"),
+    "interpretation": ("我的解读", "策略建议", "投资建议"),
+    "valuation": ("估值水位",),
+    "cross_asset": ("黄金债市", "黄金", "债券"),
+}
+
+
+def _sentence_parts(value: str) -> list[str]:
+    return [part.strip() for part in re.split(r"(?<=[。！？])", value) if part.strip()]
+
+
+def _balanced_text(value: str) -> str:
+    stack: list[int] = []
+    chars: list[str] = []
+    for char in value:
+        if char in "（(":
+            stack.append(len(chars))
+        elif char in "）)":
+            if not stack:
+                continue
+            stack.pop()
+        chars.append(char)
+    if stack:
+        del chars[stack[0] :]
+    return "".join(chars)
+
+
+def _tidy_fragment(value: str) -> str:
+    line = re.sub(r"^[-•·]{1,2}\s+", "", value.strip())
+    line = re.sub(r"^\d{1,2}[.、](?!\d)\s*", "", line)
+    text = clean_markdown(re.sub(r"[—―]+", "，", line))
+    if not text or re.search(r":-|--", text):
+        return ""
+    text = re.sub(r"[，。！？；：、]{2,}", "。", text)
+    text = _balanced_text(text).replace("(", "（").replace(")", "）")
+    return text.strip("，。；：、 ")
+
+
+def _condense_fragment(value: str, limit: int) -> str:
+    kept = ""
+    for sentence in _sentence_parts(_tidy_fragment(value)):
+        if len(kept) + len(sentence) > limit:
+            break
+        kept += sentence
+    return kept.strip("，。；：、 ")
+
+
+def _numbers_supported(value: str, supported: set[str]) -> bool:
+    return all(
+        token in supported or token.lstrip("+-").rstrip("%") in supported for token in extract_number_tokens(value)
+    )
+
+
+def _safe_value(value: str) -> str:
+    text = _balanced_text(value)
+    if text != value:
+        text = re.sub(r"[+-]?\d+(?:\.\d+)?%?$", "", text)
+    return text.strip("，。；：、 ")
+
+
+def _supported_value(value: str, supported: set[str]) -> str:
+    text = _safe_value(value)
+    return text if text and _numbers_supported(text, supported) else ""
+
+
+def _readable_fragment(value: str, limit: int, supported: set[str]) -> str:
+    if not value or not _fragment_allowed(value):
+        return ""
+    text = _safe_value(_condense_fragment(value, limit))
+    return text if _numbers_supported(text, supported) else ""
+
+
+def _fragment_allowed(value: str) -> bool:
+    return (
+        not any(char in value for char in _SIGN_UNSAFE_CHARS)
+        and not any(word in value for word in _HYPE_WORDS)
+        and not _has_prohibited_expression(value)
+    )
+
+
+def _has_prohibited_expression(value: str) -> bool:
+    for expression in get_policy("finance").prohibited_expressions:
+        for match in re.finditer(re.escape(expression), value):
+            clause_start = max(value.rfind(mark, 0, match.start()) for mark in "。！？；，") + 1
+            if any(negation in value[clause_start : match.start()] for negation in _TRADE_NEGATIONS):
+                continue
+            return True
+    return False
+
+
+def _lead_fragment(section: str, limit: int, supported: set[str]) -> str:
+    for line in section.splitlines():
+        if not line.strip() or line.lstrip().startswith("|"):
+            continue
+        text = _readable_fragment(line, limit, supported)
+        if text:
+            return text
+    return ""
+
+
+def _prose_candidates(section: str, supported: set[str]) -> list[str]:
+    lines = [line for line in section.splitlines() if re.match(r"^[-•·]{1,2}\s+\S", line)]
+    if not lines:
+        lines = [line for line in section.splitlines() if "|" not in line]
+    candidates: list[str] = []
+    for line in lines:
+        for sentence in _sentence_parts(line.strip()):
+            if not _fragment_allowed(sentence):
+                continue
+            text = _tidy_fragment(sentence).strip("，。；：、 ")
+            if len(text) >= 10 and _numbers_supported(text, supported):
+                candidates.append(text)
+    return candidates
+
+
+def _supported_numbers(response: str, publication_date: str) -> set[str]:
+    summary_values = _summary_table(response)
+    values: list[str] = [publication_date]
+    for label in ("盘面定性", "顶部摘要", "一句话总结", "四大指数", "四指数"):
+        value = _summary_value(summary_values, label)
+        if value:
+            values.append(value)
+    index_section = _section(response, *_INDEX_SECTION_KEYWORDS)
+    values.extend(" ".join(row) for row in _table_rows(index_section))
+    sector_section = _section(response, "板块轮动")
+    values.extend(" ".join(row) for row in _sector_rows(sector_section))
+    values.append(_section_text(sector_section, 1000))
+    for key in ("signals", "interpretation"):
+        values.extend(_first_sentences(_section(response, *_HEADING_SECTIONS[key]), 4))
+    valuation_section = _section(response, *_HEADING_SECTIONS["valuation"])
+    values.append(_table_text(valuation_section) or _section_text(valuation_section, 240))
+    values.append(_section_text(_section(response, *_HEADING_SECTIONS["cross_asset"]), 240))
+    tokens: set[str] = set()
+    for value in values:
+        tokens |= extract_number_tokens(value)
+    return tokens | {token.lstrip("+-") for token in tokens}
+
+
+def _stock_phrase(cell: str) -> str:
+    match = re.match(r"(.+?)([+-]\d+(?:\.\d+)?%)$", cell)
+    return f"{match.group(1)}{_spoken_change(match.group(2))}" if match else ""
+
+
+def _is_bare_change(cell: str) -> bool:
+    return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?%", cell.strip()))
+
+
+def _sector_stocks(cells: list[str]) -> list[str]:
+    phrases: list[str] = []
+    for cell in cells:
+        if _is_bare_change(cell) or not cell:
+            continue
+        phrase = _stock_phrase(cell) if len(cell) <= 16 else ""
+        if phrase:
+            phrases.append(phrase)
+            continue
+        phrases.extend(
+            f"{name}{_spoken_change(change)}"
+            for name, change in re.findall(r"([\u4e00-\u9fff]{2,8})(?:\([^)]*\))?([+-]\d+(?:\.\d+)?%)", cell)
+        )
+    return phrases
+
+
+def _sector_phrases(section: str, supported: set[str]) -> list[str]:
+    if not section:
+        return []
+    groups = _sector_groups(section)
+    chosen = _sector_rows(section)[:2]
+    extra = next(
+        (
+            row
+            for key in ("down", "up")
+            for row in groups[key]
+            if row not in chosen and _change_direction(_row_change(row)) == key
+        ),
+        None,
+    )
+    if extra is not None:
+        chosen = [*chosen, extra]
+    phrases: list[str] = []
+    for row in chosen:
+        change = _change_cell(_row_change(row))
+        if not change:
+            continue
+        direction = _change_direction(change)
+        stocks = _sector_stocks(row[1:])[:2]
+        if direction not in {"up", "down"}:
+            phrase = f"{row[0]}涨跌幅{change}"
+        elif stocks and not _is_bare_change(row[1] if len(row) > 1 else ""):
+            phrase = f"{row[0]}{'领涨' if direction == 'up' else '领跌'}：{'、'.join(stocks)}"
+        else:
+            phrase = f"{row[0]}{_spoken_change(change)}"
+            if stocks:
+                phrase += "，" + "、".join(stocks)
+        phrase = _safe_value(phrase)
+        if phrase and _numbers_supported(phrase, supported):
+            phrases.append(phrase)
+    return phrases
+
+
 def build_daily_markdown_script(
     response: str,
     publication_date: str,
@@ -223,136 +597,106 @@ def build_daily_markdown_script(
     min_chars: int = FINANCE_MIN_CHARS,
     max_chars: int = FINANCE_MAX_CHARS,
 ) -> str:
+    supported = _supported_numbers(response, publication_date)
     summary_values = _summary_table(response)
     summary_match = re.search(r"(?m)一句话总结[：:]\s*\*{0,2}\s*(.+)$", response)
-    summary = (
-        _first_sentence(summary_match.group(1))
-        if summary_match
-        else _summary_value(summary_values, "盘面定性", "顶部摘要", "一句话总结")
-    )
+    summary = _readable_fragment(summary_match.group(1), 80, supported) if summary_match else ""
     if not summary:
-        summary = trim_complete(_first_sentence(_section(response, "顶部摘要")), 60)
+        summary = _safe_value(_summary_value(summary_values, "盘面定性", "顶部摘要", "一句话总结"))
+    if not summary:
+        summary = _lead_fragment(_section(response, "顶部摘要"), 80, supported)
 
-    index_section = _section(response, "四大指数", "四指数行情", "四指数表格")
-    index_rows = _table_rows(index_section)[:4]
-    indices = []
-    for row in index_rows:
-        if len(row) >= 3:
-            indices.append(f"{row[0]}报{row[1]}点，{row[2]}")
-    index_summary = _summary_value(summary_values, "四大指数", "四指数")
+    index_section = _section(response, *_INDEX_SECTION_KEYWORDS)
+    index_rows = _table_rows(index_section)
+    indices = [f"{row[0]}报{row[1]}点，{_change_phrase(row[2])}" for row in index_rows if len(row) >= 3]
+    index_summary = _safe_value(_summary_value(summary_values, "四大指数", "四指数"))
 
     sector_section = _section(response, "板块轮动")
-    leaders: list[str] = []
-    laggards: list[str] = []
-    mode = ""
-    for line in sector_section.splitlines():
-        cleaned_line = clean_markdown(line)
-        if "领涨" in cleaned_line:
-            mode = "up"
-            continue
-        if "领跌" in cleaned_line:
-            mode = "down"
-            continue
-        if line.lstrip().startswith(("•", "-")):
-            phrase = trim_complete(clean_markdown(line), 40)
-            if mode == "up" and not leaders:
-                leaders.append(phrase)
-            elif mode == "down" and not laggards:
-                laggards.append(phrase)
-            continue
-        if line.strip().startswith("|") and not re.search(r"\|\s*:?-{2,}", line):
-            cells = [clean_markdown(cell) for cell in line.strip().strip("|").split("|")]
-            if len(cells) >= 2 and cells[0] not in {"板块", "品种"}:
-                phrase = f"{cells[0]}{cells[1]}"
-                if mode == "up" and not leaders:
-                    leaders.append(phrase)
-                elif mode == "down" and not laggards:
-                    laggards.append(phrase)
-    sector_summary = _summary_value(summary_values, "板块轮动")
-    sector_detail = trim_complete(clean_markdown(sector_section), 45) if sector_section else ""
+    sector_phrases = _sector_phrases(sector_section, supported)
+    sector_summary = _safe_value(_summary_value(summary_values, "板块轮动"))
+    sector_detail = _lead_fragment(sector_section, 60, supported)
 
-    keyword_section = _section(response, "今日关键词", "三个信号", "核心信号")
-    keywords = []
-    for line in keyword_section.splitlines():
-        named_match = re.match(r"\s*\*{0,2}(?:\d+[.、]|[①-⑩])\s*[「“](.+?)[」”]", line)
-        numbered_match = re.match(r"\s*\d+[.、]\s*(.+)", line)
-        if named_match:
-            keywords.append(clean_markdown(named_match.group(1)))
-        elif numbered_match:
-            keywords.append(_first_sentence(numbered_match.group(1)))
-        if len(keywords) == 3:
-            break
-    keyword_summary = _summary_value(summary_values, "今日关键词", "三个信号", "核心信号")
-    keyword_detail = trim_complete(clean_markdown(keyword_section), 45) if keyword_section else ""
+    keyword_section = _section(response, *_HEADING_SECTIONS["signals"])
+    keywords = [text for text in _prose_candidates(keyword_section, supported) if len(text) <= 60][:3]
+    keyword_summary = _safe_value(_summary_value(summary_values, "今日关键词", "三个信号", "核心信号"))
 
-    interpretation = _section(response, "我的解读", "策略建议", "投资建议")
-    advice_match = re.search(r"(?m)^.*我的建议.*$", interpretation)
-    strategy_match = re.search(r"(?im)^\s*\*\*策略上[：:]?\*\*\s*$", interpretation)
-    if strategy_match:
-        strategy = re.split(r"(?m)^\s*(?:\*真正|[-═─]{3,}|📁)", interpretation[strategy_match.end() :], maxsplit=1)[0]
-        strategy_items = [
-            clean_markdown(line)
-            for line in strategy.splitlines()
-            if line.lstrip().startswith(("•", "-")) and clean_markdown(line)
-        ]
-        advice = "；".join(strategy_items[:2]) if strategy_items else trim_complete(clean_markdown(strategy), 50)
-    else:
-        advice = trim_complete(
-            _first_sentence(advice_match.group(0)) if advice_match else _first_sentence(interpretation),
-            55,
-        )
-    advice_summary = _summary_value(summary_values, "我的解读", "策略建议", "投资建议")
-    valuation_section = _section(response, "估值水位")
-    valuation_rows = _table_rows(valuation_section)[:4]
-    valuation_detail = "；".join(
-        f"{row[0]}PE{row[1]}，历史百分位{row[2]}，{row[-1]}" for row in valuation_rows if len(row) >= 4
+    interpretation = _section(response, *_HEADING_SECTIONS["interpretation"])
+    advice_candidates = [text for text in _prose_candidates(interpretation, supported) if len(text) <= 90]
+    advice = "".join(advice_candidates[:2]).strip("，。；：、 ")
+    advice_summary = _safe_value(_summary_value(summary_values, "我的解读", "策略建议", "投资建议"))
+
+    valuation_section = _section(response, *_HEADING_SECTIONS["valuation"])
+    valuation_rows = _table_rows(valuation_section)[:3]
+    valuation_detail = _safe_value(
+        "；".join(f"{row[0]}PE{row[1]}，历史百分位{row[2]}，{row[3]}" for row in valuation_rows if len(row) >= 4)
     )
-    valuation_summary = _summary_value(summary_values, "估值水位", "估值") or valuation_detail
-    cross_asset_summary = _summary_value(summary_values, "黄金债市", "黄金", "债券") or trim_complete(
-        clean_markdown(_section(response, "黄金债市", "黄金", "债券")), 100
+    valuation_summary = (
+        _supported_value(_summary_value(summary_values, "估值水位", "估值"), supported) or valuation_detail
     )
+    cross_asset_section = _section(response, *_HEADING_SECTIONS["cross_asset"])
+    cross_asset_summary = _supported_value(
+        _summary_value(summary_values, "黄金债市", "黄金", "债券"), supported
+    ) or _lead_fragment(cross_asset_section, 110, supported)
 
     date_text = publication_date.replace("-", "年", 1).replace("-", "月", 1) + "日"
-    parts = [f"{date_text}A股收盘观察。"]
+    index_label = _INDEX_LABELS.get(len(index_rows), "主要指数")
+    tail_chars = len(FINANCE_RISK_NOTE) + len(DAILY_FINANCE_DISCLAIMER)
+    parts: list[str] = []
+    if index_rows and len(index_rows[0]) >= 3:
+        subject, point, change = index_rows[0][:3]
+        change = _change_cell(change)
+        direction = _change_direction(change)
+        if direction == "flat" and not any(marker in change for marker in ("持平", "平收")):
+            parts.append(f"{change}，{subject}报{point}点，当日涨跌幅{change}。")
+        else:
+            spoken_change = _spoken_change(change)
+            action = {"down": "直接跳水", "up": "强势拉升", "flat": "平收横住"}[direction]
+            parts.append(f"{change}，{subject}报{point}点，{action}{spoken_change}。")
+        parts.append(f"{date_text}A股收盘观察。")
+    elif index_summary:
+        parts.extend((f"{date_text}A股收盘观察。", "四大指数方面，" + index_summary + "。"))
+    else:
+        parts.append(f"{date_text}A股收盘观察。")
+    if indices:
+        parts.append(f"{index_label}方面，" + "；".join(indices) + "。")
     if summary:
         parts.append(summary + "。")
-    if indices:
-        parts.append("四大指数方面，" + "；".join(indices) + "。")
-    elif index_summary:
-        parts.append("四大指数方面，" + index_summary + "。")
-    if leaders or laggards:
-        sector_bits = []
-        if leaders:
-            sector_bits.append("领涨方向是" + leaders[0])
-        if laggards:
-            sector_bits.append("领跌方向是" + laggards[0])
-        parts.append("板块方面，" + "；".join(sector_bits) + "。")
+    if sector_phrases:
+        parts.append("板块方面，" + "；".join(sector_phrases) + "。")
     elif sector_summary:
         parts.append("板块方面，" + sector_summary + "。")
     elif sector_detail:
         parts.append("板块方面，" + sector_detail + "。")
-    if advice:
-        parts.append(advice + "。")
-    elif advice_summary:
-        parts.append("策略上，" + advice_summary + "。")
-    if keywords:
-        parts.append("今天需要关注的信号是：" + "；".join(keywords) + "。")
-    elif keyword_summary:
-        parts.append("今天需要关注的信号是：" + keyword_summary + "。")
-    elif keyword_detail:
-        parts.append("今天需要关注的信号是：" + keyword_detail + "。")
-    if valuation_summary:
-        parts.append("估值方面，" + valuation_summary + "。")
-    if cross_asset_summary:
-        parts.append("其他资产方面，" + cross_asset_summary + "。")
 
-    if len("".join(parts)) < 330:
-        plain_interpretation = clean_markdown(interpretation)
-        for sentence in re.split(r"(?<=[。！？])", plain_interpretation):
-            sentence = sentence.strip()
-            if sentence and sentence not in "".join(parts):
-                parts.append(sentence)
-            if len("".join(parts)) >= 410:
+    optional: list[str] = []
+    if keywords:
+        optional.append("今天需要关注的信号是：" + "；".join(keywords) + "。")
+    elif keyword_summary:
+        optional.append("今天需要关注的信号是：" + keyword_summary + "。")
+    if valuation_summary:
+        optional.append("估值方面，" + valuation_summary + "。")
+    if cross_asset_summary:
+        optional.append("其他资产方面，" + cross_asset_summary + "。")
+    if advice:
+        optional.append("策略上，" + advice + "。")
+    elif advice_summary:
+        optional.append("策略上，" + advice_summary + "。")
+
+    used = len("".join(parts)) + tail_chars
+    for candidate in optional:
+        if used + len(candidate) <= max_chars:
+            parts.append(candidate)
+            used += len(candidate)
+    if used < min_chars:
+        for sentence in advice_candidates:
+            candidate = sentence.strip("，。；：、 ") + "。"
+            if used + len(candidate) > max_chars:
+                break
+            if candidate in "".join(parts):
+                continue
+            parts.append(candidate)
+            used += len(candidate)
+            if used >= min_chars + 40:
                 break
 
     script = _finalize_script(

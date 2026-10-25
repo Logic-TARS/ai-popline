@@ -44,7 +44,7 @@ def test_load_publish_policy_packaged_defaults(tmp_path: Path) -> None:
     policy = load_publish_policy(settings)
 
     assert policy["finance"]["enabled"] is False
-    assert [target.platform for target in policy["finance"]["targets"]] == ["douyin", "kuaishou", "tencent"]
+    assert [target.platform for target in policy["finance"]["targets"]] == ["douyin", "kuaishou"]
 
 
 def test_save_publish_policy_overrides_defaults(tmp_path: Path) -> None:

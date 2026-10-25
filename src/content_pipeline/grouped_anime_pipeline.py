@@ -28,7 +28,7 @@ MPT_VISUAL_ONLY_PLACEHOLDER = "Grouped anime visual showcase"
         description="Source images grouped by filename prefix -> per-group MPT video -> optional publish",
         required_params=["source_dir"],
         external_tools=["MoneyPrinterTurbo", "ffmpeg"],
-        publish_targets=["douyin", "bilibili", "tencent"],
+        publish_targets=["douyin", "bilibili"],
     ),
 )
 def run_grouped_anime_pipeline(ctx: PipelineContext) -> None:

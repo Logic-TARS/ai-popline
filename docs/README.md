@@ -2,6 +2,7 @@
 
 - [Architecture Overview](architecture.md) — system design, 6 pipelines, data flow, external tools
 - [Configuration](configuration.md) — `.env` settings and per-pipeline defaults in `config/pipeline.defaults.yaml`
+- [Script Generation](script-generation.md) — policy-driven AI/finance narration, validation, repair, and audit boundaries
 - [Agent Interface](agent-interface.md) — MCP, REST, and CLI contracts for agents and maintainers
 - [Browser Automation Strategy](browser-automation-strategy.md) — Photo-Process browser backend decisions and constraints
 - [Web Operator Console](web-console.md) — login, dashboard, task forms, preflight, polling, artifacts, and publishing workflow

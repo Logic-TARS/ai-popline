@@ -394,16 +394,10 @@ def test_deferred_publish_session_requires_recent_login(tmp_path: Path, monkeypa
     assert not queued
 
 
-def test_deferred_publish_supports_tencent_draft_target(tmp_path: Path, monkeypatch) -> None:
+def test_deferred_publish_rejects_tencent_target(tmp_path: Path, monkeypatch) -> None:
     app = create_app(_settings(tmp_path))
     snapshot, _ = _completed_content_job(app)
-    used_targets = []
 
-    def record_upload(*, target, **_kwargs):
-        used_targets.append(target.platform)
-        return {"success": True, "delivery_status": "draft", "visibility": "draft", "draft_proof": "视频草稿保存成功"}
-
-    monkeypatch.setattr("content_pipeline.deferred_publishing.call_sau_target", record_upload)
     monkeypatch.setattr(app.state.executor, "submit", lambda fn, **kwargs: fn(**kwargs))
     body = {
         **_body(),
@@ -411,22 +405,13 @@ def test_deferred_publish_supports_tencent_draft_target(tmp_path: Path, monkeypa
     }
     with TestClient(app, base_url="http://testserver", client=("127.0.0.1", 50000)) as client:
         readiness = client.get(f"/jobs/{snapshot.task_id}/publish-readiness", headers=_bearer()).json()
-        check = client.post(f"/jobs/{snapshot.task_id}/publish", headers=_bearer(), json=body)
-        required = check.json()["detail"]["required_confirmation"]
-        accepted = client.post(
-            f"/jobs/{snapshot.task_id}/publish",
-            headers={**_bearer(), "X-AI-Pipeline-Publish-Confirmation": required},
-            json=body,
-        )
-        completed = client.get(f"/status/{snapshot.task_id}", headers=_bearer()).json()
+        rejected = client.post(f"/jobs/{snapshot.task_id}/publish", headers=_bearer(), json=body)
 
-    assert "tencent" in readiness["supported_platforms"]
-    assert readiness["defaults"]["accounts"]["tencent"] == "每日金融摘要"
-    assert accepted.status_code == 202
-    assert used_targets == ["tencent"]
-    assert completed["publication_attempts"][0]["status"] == "succeeded"
-    assert completed["publication_summary"]["targets"][0]["platform"] == "tencent"
-    assert completed["publication_summary"]["targets"][0]["visibility"] == "draft"
+    assert readiness["supported_platforms"] == ["douyin", "kuaishou"]
+    assert "tencent" not in readiness["defaults"]["accounts"]
+    assert rejected.status_code == 409
+    assert "口播视频不支持以下发布平台" in rejected.json()["detail"]
+    assert "tencent" in rejected.json()["detail"]
 
 
 class _FakeBridgeResponse:
@@ -456,8 +441,8 @@ def test_publish_account_options_come_from_bridge_and_are_cached(tmp_path: Path,
                     {"platform": "douyin", "account": "金融破壁人", "status": "valid", "status_label": "有效"},
                     {"platform": "douyin", "account": "金融破壁人", "status": "valid", "status_label": "有效"},
                     {
-                        "platform": "tencent",
-                        "account": "每日金融摘要",
+                        "platform": "kuaishou",
+                        "account": "搞AI的罗辑同学",
                         "status": "login_required",
                         "status_label": "需重新登录",
                     },
@@ -478,9 +463,11 @@ def test_publish_account_options_come_from_bridge_and_are_cached(tmp_path: Path,
 
     assert calls == [{"url": "http://bridge.test:5800/api/accounts", "auth": "Bearer secret-token"}]
     options = first["account_options"]
-    assert set(options) == {"douyin", "tencent"}
+    assert set(options) == {"douyin", "kuaishou"}
     assert [item["account"] for item in options["douyin"]] == ["金融破壁人"]
-    assert options["tencent"] == [{"account": "每日金融摘要", "status": "login_required", "status_label": "需重新登录"}]
+    assert options["kuaishou"] == [
+        {"account": "搞AI的罗辑同学", "status": "login_required", "status_label": "需重新登录"}
+    ]
     assert second["account_options"] == options
 
 
@@ -698,8 +685,8 @@ def test_inline_publication_summary_grouped_results(tmp_path: Path) -> None:
 def test_inline_publication_summary_cleans_raw_uploader_output(tmp_path: Path) -> None:
     app = create_app(_settings(tmp_path))
     blob = (
-        'stdout:\nSAU_UPLOAD_RESULT:{"platform":"tencent","success":false,'
-        '"error":"Tencent/WeChat Channels cookie is missing or expired. Run `sau tencent login` first."}\n'
+        'stdout:\nSAU_UPLOAD_RESULT:{"platform":"kuaishou","success":false,'
+        '"error":"Kuaishou cookie is missing or expired. Run `sau kuaishou login` first."}\n'
         "stderr:\n\x1b[38;2;112;172;222m2026-09-04 09:48:10\x1b[0m | INFO: noisy uploader log\n"
     )
     snapshot = _inline_job(
@@ -708,15 +695,15 @@ def test_inline_publication_summary_cleans_raw_uploader_output(tmp_path: Path) -
         status=JobStatus.PARTIAL,
         publish_results={
             "douyin": {"success": True, "publication_proof": "视频发布成功"},
-            "tencent": {"success": False, "error": blob},
+            "kuaishou": {"success": False, "error": blob},
         },
     )
 
     summary = publication_summary(snapshot)
-    tencent = next(target for target in summary["targets"] if target["platform"] == "tencent")
+    kuaishou = next(target for target in summary["targets"] if target["platform"] == "kuaishou")
 
     assert summary["state"] == "partial"
-    assert tencent["error"] == "Tencent/WeChat Channels cookie is missing or expired. Run `sau tencent login` first."
+    assert kuaishou["error"] == "Kuaishou cookie is missing or expired. Run `sau kuaishou login` first."
 
 
 def test_inline_publication_summary_truncates_long_errors(tmp_path: Path) -> None:

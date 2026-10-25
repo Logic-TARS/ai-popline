@@ -87,6 +87,58 @@ def _field(
     }
 
 
+def _quality_gate_field() -> dict[str, Any]:
+    return _field(
+        "quality_gate",
+        "质量门禁",
+        "select",
+        default="soft",
+        help_text="soft 把非合规的质量问题记为告警，不再阻断任务；strict 恢复旧行为，问题一律阻断。",
+        options=[
+            {"value": "soft", "label": "soft：告警并继续（默认）"},
+            {"value": "strict", "label": "strict：阻断任务（旧行为）"},
+        ],
+    )
+
+
+def _metadata_fields() -> list[dict[str, Any]]:
+    writer_options = [
+        {"value": "follow_script", "label": "跟随口播稿生成模式"},
+        {"value": "rule", "label": "规则生成"},
+        {"value": "llm", "label": "大模型生成"},
+    ]
+    return [
+        _field(
+            "title_writer",
+            "标题生成",
+            "select",
+            default="follow_script",
+            help_text="留空标题时，在口播完成后独立生成；follow_script 跟随 script_writer。手填标题优先。",
+            options=writer_options,
+        ),
+        _field(
+            "description_writer",
+            "简介生成",
+            "select",
+            default="follow_script",
+            help_text="留空简介时，在标题完成后独立生成；follow_script 跟随 script_writer，rule 使用原固定简介。",
+            options=writer_options,
+        ),
+        _field(
+            "metadata_failure_policy",
+            "标题/简介失败策略",
+            "select",
+            default="fail",
+            help_text="默认阻断封面、视频和发布；显式选择回退时，规则结果也必须通过校验。",
+            options=[
+                {"value": "fail", "label": "失败并阻断后续"},
+                {"value": "validated_rule_fallback", "label": "仅回退到已通过校验的规则结果"},
+            ],
+        ),
+        _field("metadata_repair_attempts", "标题/简介定向修复次数", "number", default=1, minimum=0, maximum=2),
+    ]
+
+
 PIPELINE_FIELDS: dict[str, list[dict[str, Any]]] = {
     "anime": [
         _field("script", "分镜脚本", "textarea", required=True, placeholder="第一幕……第二幕……", rows=6),
@@ -100,8 +152,13 @@ PIPELINE_FIELDS: dict[str, list[dict[str, Any]]] = {
             "脚本模式",
             "select",
             default="90_seconds",
-            options=[{"value": "90_seconds", "label": "90 秒"}],
+            options=[
+                {"value": "90_seconds", "label": "90 秒（兼容）"},
+                {"value": "short_30_60", "label": "30–60 秒实验版"},
+                {"value": "long_1_3_minutes", "label": "1–3 分钟实验版"},
+            ],
         ),
+        _field("experiment_id", "实验编号", placeholder="可选，例如 2026-11-content-test-01"),
         _field(
             "script_writer",
             "口播稿生成",
@@ -121,13 +178,33 @@ PIPELINE_FIELDS: dict[str, list[dict[str, Any]]] = {
             ],
         ),
         _field("script_repair_attempts", "定向修复次数", "number", default=1, minimum=0, maximum=2),
-        _field("title", "视频标题", placeholder="留空时自动生成"),
-        _field("description", "视频简介", "textarea", default="每日基金日报，仅供参考，不构成投资建议", rows=3),
+        _quality_gate_field(),
+        *_metadata_fields(),
+        _field(
+            "title",
+            "视频标题",
+            placeholder="留空时自动生成",
+            help_text="手填非空标题优先，并跳过标题生成阶段；留空时按标题生成模式处理。",
+        ),
+        _field(
+            "description",
+            "视频简介",
+            "textarea",
+            default="",
+            placeholder="留空时自动生成",
+            help_text="手填非空简介优先，并跳过简介生成阶段；规则模式使用原固定简介。",
+            rows=3,
+        ),
         _field("tags", "标签", "tags", default=["基金", "A股", "投资"], placeholder="基金, A股, 投资"),
         _field("douyin_account", "抖音账号", default="金融破壁人"),
-        _field("kuaishou_account", "快手账号", default="搞AI的罗辑同学"),
-        _field("tencent_account", "视频号账号", default="每日金融摘要"),
-        _field("dry_run", "安全干运行", "checkbox", default=True),
+        _field("kuaishou_account", "快手账号", default="硅基思维TARS"),
+        _field(
+            "dry_run",
+            "安全干运行",
+            "checkbox",
+            default=True,
+            help_text="仅媒体与发布干运行；口播、标题或简介选择 llm（含跟随口播）时仍会真实调用大模型。",
+        ),
     ],
     "ai_briefing": [
         _field("source_dir", "简报目录", "path", placeholder="留空时使用 AI_BRIEFING_DIR"),
@@ -137,8 +214,13 @@ PIPELINE_FIELDS: dict[str, list[dict[str, Any]]] = {
             "脚本模式",
             "select",
             default="90_seconds",
-            options=[{"value": "90_seconds", "label": "90 秒"}],
+            options=[
+                {"value": "90_seconds", "label": "90 秒（兼容）"},
+                {"value": "short_30_60", "label": "30–60 秒实验版"},
+                {"value": "long_1_3_minutes", "label": "1–3 分钟实验版"},
+            ],
         ),
+        _field("experiment_id", "实验编号", placeholder="可选，例如 2026-11-content-test-01"),
         _field(
             "script_writer",
             "口播稿生成",
@@ -158,12 +240,14 @@ PIPELINE_FIELDS: dict[str, list[dict[str, Any]]] = {
             ],
         ),
         _field("script_repair_attempts", "定向修复次数", "number", default=1, minimum=0, maximum=2),
+        _quality_gate_field(),
+        *_metadata_fields(),
         _field("handoff_wait_seconds", "交接等待秒数", "number", default=0, minimum=0, maximum=3600),
         _field(
             "title",
             "简报标题",
-            placeholder="留空时使用简报标题",
-            help_text="同时用于封面、视频和发布标题，并按各目标长度确定性截断。",
+            placeholder="留空时自动生成",
+            help_text="手填非空标题优先，并跳过标题生成阶段；同时用于封面、视频和发布标题，保留各目标长度适配。",
         ),
         _field(
             "cover_size",
@@ -205,23 +289,26 @@ PIPELINE_FIELDS: dict[str, list[dict[str, Any]]] = {
         ),
         _field("cover_background_position_x", "封面背景水平位置", "number", default=50.0, minimum=0, maximum=100),
         _field("cover_background_position_y", "封面背景垂直位置", "number", default=50.0, minimum=0, maximum=100),
-        _field("description", "视频简介", "textarea", default="今日AI简报", rows=3),
+        _field(
+            "description",
+            "视频简介",
+            "textarea",
+            default="",
+            placeholder="留空时自动生成",
+            help_text="手填非空简介优先，并跳过简介生成阶段；规则模式使用原固定简介。",
+            rows=3,
+        ),
         _field("tags", "标签", "tags", default=["AI", "人工智能", "科技"], placeholder="AI, 人工智能, 科技"),
         _field("douyin_account", "抖音账号", default="金融破壁人"),
-        _field("kuaishou_account", "快手账号", default="搞AI的罗辑同学"),
-        _field("tencent_account", "腾讯视频账号"),
-        _field("dry_run", "安全干运行", "checkbox", default=True),
-        _field("force_regenerate", "强制重新生成", "checkbox", default=False),
+        _field("kuaishou_account", "快手账号", default="硅基思维TARS"),
         _field(
-            "voice_rate",
-            "朗读速度",
-            "number",
-            placeholder="留空自动；1.0 为正常",
-            help_text="越小越慢，越大越快。建议 0.75–1.1。",
-            minimum=0.55,
-            maximum=1.2,
-            step=0.05,
+            "dry_run",
+            "安全干运行",
+            "checkbox",
+            default=True,
+            help_text="仅媒体与发布干运行；口播、标题或简介选择 llm（含跟随口播）时仍会真实调用大模型。",
         ),
+        _field("force_regenerate", "强制重新生成", "checkbox", default=False),
     ],
     "ai_art": [
         _field("source_dir", "输入图片目录", "path", required=True, placeholder=r"G:\Job\Photo-Datasets\input"),
@@ -280,7 +367,7 @@ PIPELINE_FIELDS: dict[str, list[dict[str, Any]]] = {
         _field("description", "视频简介", "textarea", rows=3),
         _field("tags", "标签", "tags", placeholder="AI, 人工智能, 科技"),
         _field("douyin_account", "抖音账号", default="金融破壁人"),
-        _field("kuaishou_account", "快手账号", default="搞AI的罗辑同学"),
+        _field("kuaishou_account", "快手账号", default="硅基思维TARS"),
         _field("dry_run", "安全干运行", "checkbox", default=True),
         _field("force_regenerate", "强制重新生成", "checkbox", default=False),
         _field(
@@ -423,7 +510,12 @@ def validate_task_for_ui(task: TaskInput) -> tuple[TaskInput, list[str]]:
     if normalized.publish:
         warnings.append("该任务会在生成和验证后尝试发布，请先使用关闭发布的同类任务审查产物。")
     if normalized.params.get("dry_run"):
-        warnings.append("安全干运行不会调用真实生成或发布工具。")
+        if content_type in {"finance", "ai_briefing"}:
+            warnings.append(
+                "安全干运行仅跳过真实媒体与发布；口播、标题或简介选择 llm（含跟随口播）时仍会真实调用大模型。"
+            )
+        else:
+            warnings.append("安全干运行不会调用真实生成或发布工具。")
     if content_type == "script_video":
         script = str(normalized.params.get("script") or "").strip()
         if script and not 300 <= len(script) <= 600:

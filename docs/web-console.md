@@ -77,7 +77,7 @@ Content Studio publishing is a separate, post-generation operation. Generating c
 
 1. Generate the video in Content Studio and review the validated artifact in the task center.
 2. Ensure `WEB_PUBLISH_ENABLED=true` is configured on the server.
-3. Select **设置发布** on the completed task and adjust platform, account, visibility, title, description, and tags. Each target defaults to **仅自己可见**; selecting **公开可见** publishes openly, is highlighted in the confirmation dialog, and changes the confirmation fingerprint. Tencent targets always save a draft and ignore the visibility choice.
+3. Select **设置发布** on the completed task and adjust platform, account, visibility, title, description, and tags. Each target defaults to **仅自己可见**; selecting **公开可见** publishes openly, is highlighted in the confirmation dialog, and changes the confirmation fingerprint.
 4. Type `确认发布` and submit. The backend binds `PUBLISH:<fingerprint>` to the source task ID, current video SHA-256, and the complete normalized publication request (including each target's visibility).
 
 The publisher reuses the guarded video artifact and never reruns MoneyPrinterTurbo. Video replacement after confirmation invalidates the fingerprint. An active attempt blocks concurrent publication; completed partial or failed attempts can be adjusted and retried. Per-platform results are independent, while recent-login, private visibility, artifact containment, deduplication, and uploader guards remain enforced.

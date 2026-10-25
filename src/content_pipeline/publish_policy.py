@@ -30,7 +30,7 @@ __all__ = [
 ]
 
 POLICY_CONTENT_TYPES = ("finance", "ai_briefing", "script_video", "grouped_anime", "ai_art")
-SUPPORTED_POLICY_PLATFORMS = ("douyin", "kuaishou", "tencent", "bilibili")
+SUPPORTED_POLICY_PLATFORMS = ("douyin", "kuaishou", "bilibili")
 
 
 def resolve_publish_plan(

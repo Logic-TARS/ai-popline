@@ -72,8 +72,12 @@ def test_console_shell_and_static_assets_are_public_but_data_is_protected(tmp_pa
     assert 'class="modal settings-modal"' in page.text
     assert 'id="settings-tabs"' in page.text
     assert 'role="tablist"' in page.text
-    assert page.text.count('role="tab"') == 3
+    assert page.text.count('role="tab"') == 4
     assert 'aria-controls="settings-panel-publish"' in page.text
+    assert 'aria-controls="settings-panel-maintenance"' in page.text
+    assert 'id="scan-cache-button"' in page.text
+    assert 'id="clean-cache-button"' in page.text
+    assert 'id="cache-cleanup-rows"' in page.text
     assert 'id="publish-policy-content-nav"' in page.text
     assert 'id="publish-policy-summary"' in page.text
     assert 'id="account-status-source"' in page.text
@@ -104,6 +108,7 @@ def test_console_shell_and_static_assets_are_public_but_data_is_protected(tmp_pa
     assert ".policy-content-nav" in css.text
     assert ".defaults-card" in css.text
     assert ".account-card" in css.text
+    assert ".cache-cleanup-row" in css.text
     assert "grid-template-rows: auto minmax(0, 1fr)" in css.text
     assert javascript.status_code == 200
     assert '<span class="field-label">${escapeHtml(field.label)}${requiredLabel}</span>' in javascript.text
@@ -178,6 +183,17 @@ def test_console_shell_and_static_assets_are_public_but_data_is_protected(tmp_pa
     assert "function accountState(item, source)" in scheduler_javascript.text
     assert 'if (source !== "bridge")' in scheduler_javascript.text
     assert "function refreshAccountStatus()" in scheduler_javascript.text
+    assert "function renderCacheCleanup(data)" in scheduler_javascript.text
+    assert "async function scanCacheFiles()" in scheduler_javascript.text
+    assert "async function cleanCacheFiles()" in scheduler_javascript.text
+    assert (
+        'scheduler.request("/maintenance/cache-cleanup", { method: "POST", body: { apply: false } })'
+        in scheduler_javascript.text
+    )
+    assert (
+        'scheduler.request("/maintenance/cache-cleanup", { method: "POST", body: { apply: true } })'
+        in scheduler_javascript.text
+    )
     assert 'submit.textContent = "保存中…"' in scheduler_javascript.text
     assert bootstrap.status_code == 401
     assert "default-src 'self'" in page.headers["content-security-policy"]
@@ -268,7 +284,6 @@ def test_ui_bootstrap_describes_supported_pipelines_without_sensitive_settings(t
     assert {field["name"] for field in pipelines["ai_briefing"]["fields"]} >= {
         "date",
         "dry_run",
-        "voice_rate",
         "script_writer",
         "cover_size",
         "cover_template",
@@ -336,6 +351,117 @@ def test_ui_bootstrap_describes_supported_pipelines_without_sensitive_settings(t
     assert API_TOKEN not in serialized
     assert SESSION_SECRET not in serialized
     assert "sensitive-output-path" not in serialized
+
+
+def test_ui_bootstrap_exposes_metadata_controls_only_for_briefing_and_finance(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        response = client.get("/ui/bootstrap", headers=_bearer())
+
+    assert response.status_code == 200
+    metadata_names = {
+        "title_writer",
+        "description_writer",
+        "metadata_failure_policy",
+        "metadata_repair_attempts",
+        "quality_gate",
+    }
+    for pipeline in response.json()["pipelines"]:
+        fields = {field["name"]: field for field in pipeline["fields"]}
+        if pipeline["content_type"] not in {"finance", "ai_briefing"}:
+            assert metadata_names.isdisjoint(fields)
+            continue
+        for name in ("title_writer", "description_writer"):
+            assert fields[name]["type"] == "select"
+            assert fields[name]["default"] == "follow_script"
+            assert {option["value"] for option in fields[name]["options"]} == {"follow_script", "rule", "llm"}
+        assert fields["metadata_failure_policy"]["default"] == "fail"
+        assert {option["value"] for option in fields["metadata_failure_policy"]["options"]} == {
+            "fail",
+            "validated_rule_fallback",
+        }
+        assert fields["metadata_repair_attempts"]["default"] == 1
+        assert fields["metadata_repair_attempts"]["minimum"] == 0
+        assert fields["metadata_repair_attempts"]["maximum"] == 2
+        assert fields["quality_gate"]["type"] == "select"
+        assert fields["quality_gate"]["default"] == "soft"
+        assert {option["value"] for option in fields["quality_gate"]["options"]} == {"soft", "strict"}
+        assert fields["description"]["default"] == ""
+        assert "手填非空" in fields["title"]["help"]
+        assert "跳过" in fields["title"]["help"]
+        assert "手填非空" in fields["description"]["help"]
+        assert "跳过" in fields["description"]["help"]
+        assert "仍会真实调用大模型" in fields["dry_run"]["help"]
+
+
+@pytest.mark.parametrize("content_type", ["finance", "ai_briefing"])
+def test_metadata_ui_round_trip_respects_defaults_and_manual_overrides(tmp_path: Path, content_type: str) -> None:
+    defaults = tmp_path / "pipeline.defaults.yaml"
+    defaults.write_text(
+        f"""
+enabled: true
+pipelines:
+  {content_type}:
+    params:
+      script_writer: llm
+      title_writer: rule
+      description_writer: llm
+      metadata_failure_policy: validated_rule_fallback
+      metadata_repair_attempts: 2
+      description: ""
+""",
+        encoding="utf-8",
+    )
+    with _client(tmp_path, pipeline_defaults_file=defaults) as client:
+        bootstrap = client.get("/ui/bootstrap", headers=_bearer())
+        pipeline = next(item for item in bootstrap.json()["pipelines"] if item["content_type"] == content_type)
+        fields = {field["name"]: field for field in pipeline["fields"]}
+        params = {field["name"]: field["default"] for field in pipeline["fields"] if field["default"] is not None}
+        params.update(title="人工标题", description="人工发布简介")
+        response = client.post(
+            "/validate-task",
+            headers=_bearer(),
+            json={"description": "元数据表单预检", "content_type": content_type, "publish": False, "params": params},
+        )
+        jobs = client.get("/jobs", headers=_bearer())
+
+    assert fields["title_writer"]["default"] == "rule"
+    assert fields["description_writer"]["default"] == "llm"
+    assert fields["metadata_failure_policy"]["default"] == "validated_rule_fallback"
+    assert fields["metadata_repair_attempts"]["default"] == 2
+    assert fields["description"]["default"] == ""
+    assert response.status_code == 200, response.text
+    normalized = response.json()["task"]["params"]
+    for name in ("title_writer", "description_writer", "metadata_failure_policy", "metadata_repair_attempts"):
+        assert normalized[name] == fields[name]["default"]
+    assert normalized["title"] == "人工标题"
+    assert normalized["description"] == "人工发布简介"
+    assert any("仍会真实调用大模型" in warning for warning in response.json()["warnings"])
+    assert "安全干运行不会调用真实生成或发布工具。" not in response.json()["warnings"]
+    assert jobs.json() == {"jobs": []}
+
+
+@pytest.mark.parametrize("content_type", ["finance", "ai_briefing"])
+def test_metadata_preflight_expands_automatic_defaults(tmp_path: Path, content_type: str) -> None:
+    with _client(tmp_path) as client:
+        response = client.post(
+            "/validate-task",
+            headers=_bearer(),
+            json={
+                "description": "自动元数据预检",
+                "content_type": content_type,
+                "publish": False,
+                "params": {"script_writer": "llm", "dry_run": True},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    params = response.json()["task"]["params"]
+    assert params["title_writer"] == "follow_script"
+    assert params["description_writer"] == "follow_script"
+    assert params["metadata_failure_policy"] == "fail"
+    assert params["metadata_repair_attempts"] == 1
+    assert params["description"] == ""
+    assert any("仍会真实调用大模型" in warning for warning in response.json()["warnings"])
 
 
 def test_ui_bootstrap_applies_enabled_ai_art_pipeline_defaults(tmp_path: Path) -> None:
@@ -683,7 +809,7 @@ def _ready_briefing_draft(tmp_path: Path) -> str:
     return draft_id
 
 
-@pytest.mark.parametrize("script", ["短稿", "长" * 601])
+@pytest.mark.parametrize("script", ["短稿。", "A" * 601 + "。"])
 def test_content_studio_creates_video_task_outside_recommended_length(tmp_path: Path, script: str) -> None:
     from content_pipeline.content_studio.models import ContentDraft, ResearchSource
     from content_pipeline.content_studio.store import ContentDraftStore

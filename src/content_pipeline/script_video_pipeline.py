@@ -24,7 +24,7 @@ __all__ = ["run_script_video_pipeline"]
         description="Reviewed narration script -> narrated 9:16 MPT video -> optional private upload",
         required_params=["title", "script"],
         external_tools=["MoneyPrinterTurbo", "social-auto-upload"],
-        publish_targets=["douyin", "kuaishou", "tencent"],
+        publish_targets=["douyin", "kuaishou"],
     ),
 )
 def run_script_video_pipeline(ctx: PipelineContext) -> None:
@@ -94,7 +94,6 @@ def run_script_video_pipeline(ctx: PipelineContext) -> None:
     default_targets = [
         PublishTarget(platform="douyin", account=params.douyin_account),
         PublishTarget(platform="kuaishou", account=params.kuaishou_account),
-        PublishTarget(platform="tencent", account=params.tencent_account),
     ]
     final, error = publish_generated_video(
         snapshot=ctx.snapshot,
