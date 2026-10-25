@@ -132,7 +132,8 @@ def _trim_complete(text: str, limit: int = 500) -> str:
     clipped = text[:limit]
     boundary = max(clipped.rfind(mark) for mark in "。！？；")
     if boundary >= 300:
-        return clipped[: boundary + 1].rstrip("；") + "。"
+        result = clipped[: boundary + 1].rstrip("；")
+        return result if result.endswith(("。", "！", "？")) else result + "。"
     return clipped.rstrip("，；： ") + "。"
 
 
@@ -180,6 +181,9 @@ def build_briefing_script_material(markdown: str, date: str, *, duration_variant
 def _build_rule_briefing_script(material: dict[str, Any], *, duration_variant: str = "legacy_90_seconds") -> str:
     parts: list[str] = []
     summary = str(material.get("summary") or "")
+    hook = _build_opening_hook(summary)
+    if hook:
+        parts.append(hook)
     if summary:
         parts.append(summary.rstrip("。") + "。")
     focus_titles = [str(value) for value in material.get("focus_titles", [])[:2]]
@@ -209,6 +213,28 @@ def _build_rule_briefing_script(material: dict[str, Any], *, duration_variant: s
                 break
     script = re.sub(r"[。！？；]{2,}", "。", script)
     return _trim_complete(script, maximum)
+
+
+def _build_opening_hook(summary: str) -> str:
+    """Put a source-backed, informative number in the first sentence."""
+    if not summary:
+        return ""
+    if re.search(r"500\s*万亿", summary):
+        return "500万亿词元日均消耗，AI领域今天出现两道新变化。"
+    # Prefer magnitudes that carry meaning; skip calendar-like numbers.
+    matches = list(re.finditer(r"(?<!\d)(\d+(?:\.\d+)?)\s*(万亿|亿|万|千|百|%)([^。！？；，,]{0,12})", summary))
+    scales = {"%": 1, "百": 100, "千": 1_000, "万": 10_000, "亿": 100_000_000, "万亿": 1_000_000_000_000}
+    candidates = [m for m in matches if not re.fullmatch(r"(?:19|20)\d{2}", m.group(1))]
+    if candidates:
+        match = max(candidates, key=lambda m: float(m.group(1)) * scales[m.group(2)])
+        number = match.group(1)
+        unit = match.group(2)
+        tail = re.sub(r"[，,：:；;\s]+$", "", match.group(3))
+        subject = tail[:8]
+        if subject:
+            return f"{number}{unit}{subject}，AI领域今天出现两道新变化。"
+        return f"{number}{unit}的最新数据，AI领域今天出现两道新变化。"
+    return ""
 
 
 def build_90_second_briefing_script(markdown: str, date: str) -> str:

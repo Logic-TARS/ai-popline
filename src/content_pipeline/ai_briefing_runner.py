@@ -62,6 +62,8 @@ def main() -> int:
             "handoff_wait_seconds": args.handoff_wait_seconds,
             "dry_run": args.dry_run,
             "force_regenerate": args.force_regenerate,
+            "douyin_account": "硅基思维TARS",
+            "kuaishou_account": "硅基思维TARS",
         },
     )
     try:

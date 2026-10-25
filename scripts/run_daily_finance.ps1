@@ -8,6 +8,7 @@ $uvExe = 'C:\Users\Family\.local\bin\uv.exe'
 $logDir = Join-Path $projectRoot 'output\scheduler'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logPath = Join-Path $logDir ("finance-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
+$financeAccount = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('6YeR6J6N56C05aOB5Lq6'))
 
 $taskPath = Join-Path $logDir 'task.finance.daily.json'
 $task = [ordered]@{
@@ -17,8 +18,8 @@ $task = [ordered]@{
     params       = [ordered]@{
         date        = 'auto'
         script_mode = '90_seconds'
-        douyin_account = '金融破壁人'
-        kuaishou_account = '金融破壁人'
+        douyin_account = $financeAccount
+        kuaishou_account = $financeAccount
         dry_run     = $false
     }
 }
