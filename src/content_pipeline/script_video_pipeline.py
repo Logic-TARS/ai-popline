@@ -85,9 +85,13 @@ def run_script_video_pipeline(ctx: PipelineContext) -> None:
         phase="媒体校验",
         message="正在校验字幕、视频比例和音频轨道",
     )
-    validate_spoken_subtitle(result.subtitle)
     if not params.dry_run:
         ctx.artifacts.validation.video = validate_video(result.video, expected_aspect="9:16", require_audio=True)
+        validate_spoken_subtitle(
+            result.subtitle, media_duration=ctx.artifacts.validation.video.duration_seconds
+        )
+    else:
+        validate_spoken_subtitle(result.subtitle)
     plan = resolve_publish_plan("script_video", ctx.snapshot.task, settings=ctx.settings)
     if plan["requested"]:
         ctx.store.set_progress(ctx.task_id, percent=95, phase="发布", message="正在提交发布任务")

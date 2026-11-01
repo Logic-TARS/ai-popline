@@ -553,9 +553,22 @@ def run_finance_pipeline(ctx: PipelineContext) -> None:
     artifacts.video = mpt_result.video
     artifacts.subtitle = mpt_result.subtitle
     artifacts.mpt_task_dir = mpt_result.task_dir
-    validate_spoken_subtitle(mpt_result.subtitle)
     if not params.dry_run:
-        artifacts.validation.video = validate_video(mpt_result.video, expected_aspect="9:16", require_audio=True, allowed_duration=(30.0, 60.0) if params.duration_variant == "short_30_60" else (60.0, 180.0) if params.duration_variant == "long_1_3_minutes" else None)
+        artifacts.validation.video = validate_video(
+            mpt_result.video,
+            expected_aspect="9:16",
+            require_audio=True,
+            allowed_duration=(30.0, 60.0)
+            if params.duration_variant == "short_30_60"
+            else (60.0, 180.0)
+            if params.duration_variant == "long_1_3_minutes"
+            else None,
+        )
+        validate_spoken_subtitle(
+            mpt_result.subtitle, media_duration=artifacts.validation.video.duration_seconds
+        )
+    else:
+        validate_spoken_subtitle(mpt_result.subtitle)
     store.set_artifacts(task_id, artifacts)
 
     plan = resolve_publish_plan("finance", snapshot.task, settings=settings)

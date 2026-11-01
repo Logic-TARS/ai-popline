@@ -651,17 +651,40 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
             force_regenerate=params.force_regenerate,
             input_hashes=input_hashes,
             voice_rate=1.0 if (params.duration_variant or "legacy_90_seconds") == "legacy_90_seconds" else None,
-            target_duration_seconds=45.0 if params.duration_variant == "short_30_60" else 120.0 if params.duration_variant == "long_1_3_minutes" else 90.0,
-            allowed_duration=(30.0, 60.0) if params.duration_variant == "short_30_60" else (60.0, 180.0) if params.duration_variant == "long_1_3_minutes" else None,
-            generation_metadata={"experiment_id": params.experiment_id, "strategy_profile": params.strategy_profile, "duration_variant": params.duration_variant},
+            target_duration_seconds=45.0
+            if params.duration_variant == "short_30_60"
+            else 120.0
+            if params.duration_variant == "long_1_3_minutes"
+            else 90.0,
+            allowed_duration=(30.0, 60.0)
+            if params.duration_variant == "short_30_60"
+            else (60.0, 180.0)
+            if params.duration_variant == "long_1_3_minutes"
+            else None,
+            generation_metadata={
+                "experiment_id": params.experiment_id,
+                "strategy_profile": params.strategy_profile,
+                "duration_variant": params.duration_variant,
+            },
         )
-        validate_spoken_subtitle(result.subtitle)
         artifacts.video = result.video
         artifacts.subtitle = result.subtitle
         artifacts.mpt_task_dir = result.task_dir
         artifacts.manifest_path = result.manifest
         if not params.dry_run:
-            artifacts.validation.video = validate_video(result.video, expected_aspect="9:16", require_audio=True, allowed_duration=(30.0, 60.0) if params.duration_variant == "short_30_60" else (60.0, 180.0) if params.duration_variant == "long_1_3_minutes" else None)
+            artifacts.validation.video = validate_video(
+                result.video,
+                expected_aspect="9:16",
+                require_audio=True,
+                allowed_duration=(30.0, 60.0)
+                if params.duration_variant == "short_30_60"
+                else (60.0, 180.0)
+                if params.duration_variant == "long_1_3_minutes"
+                else None,
+            )
+            validate_spoken_subtitle(
+                result.subtitle, media_duration=artifacts.validation.video.duration_seconds
+            )
             status["video_sha256"] = _sha256(result.video)
             status["sau_file_hash"] = _sau_file_hash(result.video)
             legacy_output = Path(str(handoff["output_dir"]))
@@ -675,6 +698,8 @@ def run_ai_briefing_pipeline(ctx: PipelineContext) -> None:
             artifacts.video = legacy_video
             artifacts.subtitle = legacy_subtitle
             artifacts.manifest_path = legacy_manifest
+        else:
+            validate_spoken_subtitle(result.subtitle)
         store.set_artifacts(task_id, artifacts)
         status["steps"]["video_generation"] = "ok"
         status["steps"]["subtitle_check"] = "ok"

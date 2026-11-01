@@ -6,13 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from content_pipeline.errors import ExternalToolError
+from content_pipeline.errors import ExternalToolError, MediaValidationError
 from content_pipeline.settings import Settings
 from content_pipeline.tools.common import mpt_task_id
 from content_pipeline.tools.narrated_mpt_client import (
     _adaptive_voice_rate,
     _guard_generated_subtitle,
     call_narrated_mpt,
+    validate_spoken_subtitle,
 )
 
 
@@ -66,6 +67,7 @@ def test_mismatched_input_hash_never_reuses_existing_task(tmp_path: Path, monkey
         input_hashes={"article.md": "new"},
     )
     assert captured[captured.index("--task-id") + 1] == mpt_name
+    assert captured[captured.index("--subtitle-provider") + 1] == "edge"
     environment = captured_kwargs["env"]
     assert isinstance(environment, dict)
     assert environment["PYTHONIOENCODING"] == "utf-8"
@@ -84,7 +86,7 @@ def test_invalid_exact_task_is_archived_instead_of_reused(tmp_path: Path, monkey
     task_dir.mkdir(parents=True)
     (task_dir / "final-1.mp4").write_bytes(b"incomplete-video")
     (task_dir / "subtitle.srt").write_text(
-        "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的金融字幕。\n",
+        "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的金融字幕，用于测试。\n",
         encoding="utf-8",
     )
     (task_dir / "script.json").write_text(json.dumps({"script": "same narration"}), encoding="utf-8")
@@ -95,7 +97,7 @@ def test_invalid_exact_task_is_archived_instead_of_reused(tmp_path: Path, monkey
         task_dir.mkdir(parents=True, exist_ok=True)
         (task_dir / "final-1.mp4").write_bytes(b"regenerated-video")
         (task_dir / "subtitle.srt").write_text(
-            "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的金融字幕。\n",
+            "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的金融字幕，用于测试。\n",
             encoding="utf-8",
         )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -128,7 +130,7 @@ def test_narrated_mpt_reports_safe_milestones_from_streamed_output(tmp_path: Pat
         task_dir.mkdir(parents=True, exist_ok=True)
         (task_dir / "final-1.mp4").write_bytes(b"new-video")
         (task_dir / "subtitle.srt").write_text(
-            "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的口播字幕内容。\n",
+            "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的口播字幕内容，用于测试。\n",
             encoding="utf-8",
         )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -175,6 +177,7 @@ def test_voice_rate_is_part_of_reuse_identity(tmp_path: Path, monkeypatch) -> No
     )
     first_manifest = json.loads((output_dir / "generation_manifest.json").read_text(encoding="utf-8"))
     assert first_manifest["voice_rate"] == 0.8
+    assert first_manifest["subtitle_provider"] == "edge"
 
     task_dir = mpt_dir / "storage" / "tasks" / mpt_task_id(task_name)
     captured: list[str] = []
@@ -184,7 +187,7 @@ def test_voice_rate_is_part_of_reuse_identity(tmp_path: Path, monkeypatch) -> No
         task_dir.mkdir(parents=True, exist_ok=True)
         (task_dir / "final-1.mp4").write_bytes(b"new-video")
         (task_dir / "subtitle.srt").write_text(
-            "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的口播字幕内容。\n",
+            "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的口播字幕内容，用于测试。\n",
             encoding="utf-8",
         )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -202,6 +205,84 @@ def test_voice_rate_is_part_of_reuse_identity(tmp_path: Path, monkeypatch) -> No
     assert captured[captured.index("--voice-rate") + 1] == "1.1"
     updated_manifest = json.loads((output_dir / "generation_manifest.json").read_text(encoding="utf-8"))
     assert updated_manifest["voice_rate"] == 1.1
+
+
+def test_subtitle_provider_is_part_of_reuse_identity(tmp_path: Path, monkeypatch) -> None:
+    mpt_dir = tmp_path / "mpt"
+    output_dir = tmp_path / "output"
+    task_name = "content-subtitle-provider"
+    script = "市场信息。" * 80
+
+    call_narrated_mpt(
+        task_name=task_name,
+        title="今日资讯",
+        script=script,
+        output_dir=output_dir,
+        settings=Settings(mpt_dir=mpt_dir, mpt_python=Path("python")),
+        dry_run=True,
+    )
+    captured: list[str] = []
+    task_dir = mpt_dir / "storage" / "tasks" / mpt_task_id(task_name)
+
+    def fake_run(command, **_kwargs):
+        captured.extend(command)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "final-1.mp4").write_bytes(b"new-video")
+        (task_dir / "subtitle.srt").write_text(
+            "1\n00:00:00,000 --> 00:00:05,000\n这是一段足够长并且有效的口播字幕内容，用于测试。\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("content_pipeline.tools.narrated_mpt_client.run_command", fake_run)
+    call_narrated_mpt(
+        task_name=task_name,
+        title="今日资讯",
+        script=script,
+        output_dir=output_dir,
+        settings=Settings(mpt_dir=mpt_dir, mpt_python=Path("python")),
+        subtitle_provider="whisper",
+    )
+
+    assert captured[captured.index("--subtitle-provider") + 1] == "whisper"
+    manifest = json.loads((output_dir / "generation_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["subtitle_provider"] == "whisper"
+
+
+@pytest.mark.parametrize(
+    ("timestamps", "media_duration", "message"),
+    [
+        ("00:00:00,000 --> 00:00:00,000", None, "zero or negative"),
+        (
+            "00:00:02,000 --> 00:00:03,000\n字幕第一句内容足够长。\n\n2\n00:00:01,000 --> 00:00:04,000",
+            None,
+            "moves backwards",
+        ),
+        ("00:00:00,000 --> 00:00:05,000", 30.0, "does not cover"),
+    ],
+)
+def test_validate_spoken_subtitle_rejects_invalid_timeline(
+    tmp_path: Path, timestamps: str, media_duration: float | None, message: str
+) -> None:
+    subtitle = tmp_path / "subtitle.srt"
+    subtitle.write_text(
+        f"1\n{timestamps}\n这是一段足够长并且有效的字幕内容，用于验证时间轴检查。\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MediaValidationError, match=message):
+        validate_spoken_subtitle(subtitle, media_duration=media_duration)
+
+
+def test_validate_spoken_subtitle_accepts_valid_timeline(tmp_path: Path) -> None:
+    subtitle = tmp_path / "subtitle.srt"
+    subtitle.write_text(
+        "1\n00:00:00,000 --> 00:00:03,000\n这是一段足够长并且有效的字幕内容。\n\n"
+        "2\n00:00:03,200 --> 00:00:05,000\n用于验证正常时间轴能够通过检查。\n",
+        encoding="utf-8",
+    )
+
+    validate_spoken_subtitle(subtitle, media_duration=5.8)
 
 
 def test_narrated_mpt_cleans_temporary_directory_when_run_fails(tmp_path: Path, monkeypatch) -> None:

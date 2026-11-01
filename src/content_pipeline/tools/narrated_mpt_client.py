@@ -28,6 +28,10 @@ class NarratedMptResult:
 
 
 ProgressCallback = Callable[[int, str, str, bool], None]
+_SRT_TIMING = re.compile(
+    r"^(\d{2,}):([0-5]\d):([0-5]\d)[,.](\d{3})\s*-->\s*"
+    r"(\d{2,}):([0-5]\d):([0-5]\d)[,.](\d{3})$"
+)
 
 
 def _report_mpt_output(line: str, callback: ProgressCallback) -> None:
@@ -54,21 +58,44 @@ def looks_like_file_reference(value: str) -> bool:
     )
 
 
-def validate_spoken_subtitle(path: Path) -> None:
+def validate_spoken_subtitle(path: Path, *, media_duration: float | None = None) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         raise MediaValidationError(f"subtitle is missing or empty: {path}")
     text = path.read_text(encoding="utf-8-sig", errors="replace")
+    timings: list[tuple[float, float]] = []
+    for line in (line.strip() for line in text.splitlines() if "-->" in line):
+        match = _SRT_TIMING.fullmatch(line)
+        if not match:
+            raise MediaValidationError(f"subtitle contains an invalid timestamp: {path}")
+        values = [int(value) for value in match.groups()]
+        start = values[0] * 3600 + values[1] * 60 + values[2] + values[3] / 1000
+        end = values[4] * 3600 + values[5] * 60 + values[6] + values[7] / 1000
+        if end <= start:
+            raise MediaValidationError(f"subtitle contains a zero or negative duration cue: {path}")
+        if timings and (start < timings[-1][0] or end < timings[-1][1]):
+            raise MediaValidationError(f"subtitle timeline moves backwards: {path}")
+        timings.append((start, end))
+    if not timings:
+        raise MediaValidationError(f"subtitle contains no timestamps: {path}")
     spoken = " ".join(
         line.strip() for line in text.splitlines() if line.strip() and "-->" not in line and not line.strip().isdigit()
     )
     if len(spoken) < 20 or looks_like_file_reference(spoken.replace(" ", "")):
         raise MediaValidationError(f"subtitle is unusable or looks like a file path: {path}")
+    if media_duration is not None:
+        tolerance = max(2.0, media_duration * 0.05)
+        if abs(timings[-1][1] - media_duration) > tolerance:
+            raise MediaValidationError(f"subtitle timeline does not cover the media duration: {path}")
 
 
-def _has_valid_narrated_artifacts(video: Path, subtitle: Path, allowed_duration: tuple[float, float] | None = None) -> bool:
+def _has_valid_narrated_artifacts(
+    video: Path, subtitle: Path, allowed_duration: tuple[float, float] | None = None
+) -> bool:
     try:
-        validate_spoken_subtitle(subtitle)
-        validate_video(video, expected_aspect="9:16", require_audio=True, allowed_duration=allowed_duration)
+        validation = validate_video(
+            video, expected_aspect="9:16", require_audio=True, allowed_duration=allowed_duration
+        )
+        validate_spoken_subtitle(subtitle, media_duration=validation.duration_seconds)
     except MediaValidationError:
         return False
     return True
@@ -97,6 +124,7 @@ def _identity(
     script: str,
     input_hashes: dict[str, str] | None,
     voice_rate: float,
+    subtitle_provider: str,
     target_duration_seconds: float,
     generation_metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -105,6 +133,7 @@ def _identity(
         "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest(),
         "input_sha256": dict(sorted((input_hashes or {}).items())),
         "voice_rate": voice_rate,
+        "subtitle_provider": subtitle_provider,
         "target_duration_seconds": target_duration_seconds,
         "generation_metadata": dict(sorted((generation_metadata or {}).items())),
     }
@@ -145,6 +174,7 @@ def call_narrated_mpt(
     force_regenerate: bool = False,
     input_hashes: dict[str, str] | None = None,
     voice_rate: float | None = None,
+    subtitle_provider: str = "edge",
     target_duration_seconds: float = 90.0,
     allowed_duration: tuple[float, float] | None = None,
     generation_metadata: dict[str, object] | None = None,
@@ -169,7 +199,13 @@ def call_narrated_mpt(
         voice_rate if voice_rate is not None else _adaptive_voice_rate(script, target_duration_seconds)
     )
     identity = _identity(
-        title, script, input_hashes, resolved_voice_rate, target_duration_seconds, generation_metadata
+        title,
+        script,
+        input_hashes,
+        resolved_voice_rate,
+        subtitle_provider,
+        target_duration_seconds,
+        generation_metadata,
     )
 
     if (
@@ -178,7 +214,7 @@ def call_narrated_mpt(
         and target_subtitle.is_file()
         and _read_manifest(target_manifest) | {"schema_version": "1.0", "task_id": task_name}
         == {"schema_version": "1.0", "task_id": task_name, **identity}
-        and _has_valid_narrated_artifacts(target_video, target_subtitle)
+        and _has_valid_narrated_artifacts(target_video, target_subtitle, allowed_duration)
     ):
         if on_progress:
             on_progress(80, "复用既有视频", "已验证可复用的视频和字幕", False)
@@ -213,7 +249,11 @@ def call_narrated_mpt(
         exact_task_match = existing_script == script and all(
             manifest_identity.get(key) == value for key, value in identity.items()
         )
-    if not force_regenerate and exact_task_match and _has_valid_narrated_artifacts(reusable_video, reusable_subtitle):
+    if (
+        not force_regenerate
+        and exact_task_match
+        and _has_valid_narrated_artifacts(reusable_video, reusable_subtitle, allowed_duration)
+    ):
         reusable_video = _guard_generated_video(reusable_video, settings.mpt_dir)
         reusable_subtitle = _guard_generated_subtitle(reusable_subtitle, task_dir)
         if on_progress:
@@ -244,6 +284,8 @@ def call_narrated_mpt(
         "--voice-rate",
         str(resolved_voice_rate),
         "--subtitle-enabled",
+        "--subtitle-provider",
+        subtitle_provider,
         "--task-id",
         mpt_name,
     ]
@@ -288,6 +330,7 @@ def call_narrated_mpt(
         raise ExternalToolError(f"MPT timed out with incomplete narrated artifacts in {task_dir}")
     source_video = _guard_generated_video(source_video, settings.mpt_dir)
     source_subtitle = _guard_generated_subtitle(source_subtitle, task_dir)
+    validate_spoken_subtitle(source_subtitle)
 
     if on_progress:
         on_progress(80, "复制视频产物", "视频和字幕已生成，正在复制到任务目录", False)
